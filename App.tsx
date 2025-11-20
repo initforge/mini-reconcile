@@ -1,0 +1,210 @@
+
+import React, { useState, useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import Sidebar from './components/Sidebar';
+import Dashboard from './components/Dashboard';
+import ReconciliationModule from './components/ReconciliationModule';
+import Login from './components/Login';
+import Personnel from './components/Personnel';
+import Agents from './components/Agents';
+import Merchants from './components/Merchants';
+import Payouts from './components/Payouts';
+import Reports from './components/Reports';
+import Settings from './components/Settings';
+import { Stats } from './types';
+// import { useAuth } from './src/lib/firebaseHooks'; // Disabled for mock auth
+
+// Placeholder components for views not fully implemented in this demo
+const PlaceholderView = ({ title, icon: Icon, desc }: any) => (
+  <div className="flex flex-col items-center justify-center h-[60vh] text-slate-400">
+    <div className="bg-slate-100 p-6 rounded-full mb-4">
+      <Icon className="w-12 h-12" />
+    </div>
+    <h2 className="text-xl font-bold text-slate-700">{title}</h2>
+    <p className="mt-2 max-w-md text-center">{desc}</p>
+    <button className="mt-6 px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
+      Thêm mới {title}
+    </button>
+  </div>
+);
+
+// Protected Route Component
+const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const isAuthenticated = localStorage.getItem('mockAuth') === 'true';
+  return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
+};
+
+// Layout Component with Sidebar
+const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const location = useLocation();
+  const currentPath = location.pathname.slice(1) || 'dashboard';
+
+  const handleLogout = () => {
+    console.log('🚪 Mock logout triggered');
+    localStorage.removeItem('mockAuth');
+    window.location.href = '/login';
+  };
+
+  return (
+    <div className="flex min-h-screen bg-slate-50">
+      <Sidebar 
+        activeTab={currentPath}
+        onLogout={handleLogout}
+      />
+      
+      <main className="flex-1 ml-64 p-8 overflow-y-auto h-screen">
+        {/* Header */}
+        <header className="flex justify-between items-center mb-8">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">
+              {currentPath === 'dashboard' && 'Tổng quan hệ thống'}
+              {currentPath === 'reconciliation' && 'Trung tâm đối soát'}
+              {currentPath === 'personnel' && 'Quản lý nhân sự'}
+              {currentPath === 'merchants' && 'Danh sách Điểm bán'}
+              {currentPath === 'agents' && 'Danh sách Đại lý'}
+              {currentPath === 'payouts' && 'Quản lý Thanh toán'}
+              {currentPath === 'reports' && 'Báo cáo Công nợ'}
+              {currentPath === 'settings' && 'Cài đặt'}
+            </h1>
+            <p className="text-sm text-slate-500 mt-1">{new Date().toLocaleDateString('vi-VN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+          </div>
+          
+          <div className="flex items-center space-x-4">
+             <div className="bg-white border border-slate-200 rounded-lg px-4 py-2 flex items-center text-sm text-slate-600 shadow-sm">
+               <span className="w-2 h-2 rounded-full bg-green-500 mr-2"></span>
+               Hệ thống hoạt động: Bình thường
+             </div>
+          </div>
+        </header>
+
+        {/* Content Area */}
+        <div className="animate-fade-in">
+          {children}
+        </div>
+      </main>
+    </div>
+  );
+};
+
+function App() {
+  
+  const handleLogin = () => {
+    console.log('🔐 Mock login triggered');
+    localStorage.setItem('mockAuth', 'true');
+    window.location.href = '/dashboard';
+  };
+
+  return (
+    <Router>
+      <Routes>
+        {/* Login Route */}
+        <Route 
+          path="/login" 
+          element={<Login onLogin={handleLogin} />} 
+        />
+        
+        {/* Protected Routes */}
+        <Route 
+          path="/dashboard" 
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <Dashboard />
+              </AppLayout>
+            </ProtectedRoute>
+          } 
+        />
+        
+        <Route 
+          path="/reconciliation" 
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <ReconciliationModule />
+              </AppLayout>
+            </ProtectedRoute>
+          } 
+        />
+        
+        <Route 
+          path="/merchants" 
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <Merchants />
+              </AppLayout>
+            </ProtectedRoute>
+          } 
+        />
+        
+        <Route 
+          path="/agents" 
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <Agents />
+              </AppLayout>
+            </ProtectedRoute>
+          } 
+        />
+        
+        <Route 
+          path="/personnel" 
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <Personnel />
+              </AppLayout>
+            </ProtectedRoute>
+          } 
+        />
+        
+        <Route 
+          path="/payouts" 
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <Payouts />
+              </AppLayout>
+            </ProtectedRoute>
+          } 
+        />
+        
+        <Route 
+          path="/reports" 
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <Reports />
+              </AppLayout>
+            </ProtectedRoute>
+          } 
+        />
+        
+        <Route 
+          path="/settings" 
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <Settings />
+              </AppLayout>
+            </ProtectedRoute>
+          } 
+        />
+        
+        {/* Default Redirects */}
+        <Route 
+          path="/" 
+          element={<Navigate to="/dashboard" replace />} 
+        />
+        
+        <Route 
+          path="*" 
+          element={<Navigate to="/dashboard" replace />} 
+        />
+      </Routes>
+    </Router>
+  );
+}
+
+export default App;
