@@ -2390,91 +2390,102 @@ const ReconciliationModule: React.FC = () => {
           </div>
 
           {/* Aggregated Data Summary - Hiển thị dữ liệu tổng hợp */}
-          {currentSessionData?.aggregatedData && (
+          {currentSessionId && currentSessionData && (
             <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-xl p-6 shadow-sm border border-indigo-100">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-semibold text-indigo-800 flex items-center">
                   <FileText className="w-5 h-5 mr-2" />
                   Dữ liệu Tổng hợp (Aggregated Data)
                 </h3>
-                <button
-                  onClick={() => setShowAggregatedData(!showAggregatedData)}
-                  className="text-sm text-indigo-600 hover:text-indigo-800 flex items-center"
-                >
-                  {showAggregatedData ? 'Ẩn' : 'Xem chi tiết'}
-                  {showAggregatedData ? <X className="w-4 h-4 ml-1" /> : <Eye className="w-4 h-4 ml-1" />}
-                </button>
+                {currentSessionData.aggregatedData && (
+                  <button
+                    onClick={() => setShowAggregatedData(!showAggregatedData)}
+                    className="text-sm text-indigo-600 hover:text-indigo-800 flex items-center"
+                  >
+                    {showAggregatedData ? 'Ẩn' : 'Xem chi tiết'}
+                    {showAggregatedData ? <X className="w-4 h-4 ml-1" /> : <Eye className="w-4 h-4 ml-1" />}
+                  </button>
+                )}
               </div>
               
-              <div className="grid grid-cols-3 gap-4 mb-4">
-                <div className="bg-white rounded-lg p-3 border border-indigo-200">
-                  <p className="text-xs text-slate-600 mb-1">Mã giao dịch</p>
-                  <p className="text-lg font-bold text-indigo-700">
-                    {Object.keys(currentSessionData.aggregatedData.byTransactionCode || {}).length}
-                  </p>
-                </div>
-                <div className="bg-white rounded-lg p-3 border border-indigo-200">
-                  <p className="text-xs text-slate-600 mb-1">Điểm thu</p>
-                  <p className="text-lg font-bold text-indigo-700">
-                    {Object.keys(currentSessionData.aggregatedData.byPointOfSale || {}).length}
-                  </p>
-                </div>
-                <div className="bg-white rounded-lg p-3 border border-indigo-200">
-                  <p className="text-xs text-slate-600 mb-1">Đại lý</p>
-                  <p className="text-lg font-bold text-indigo-700">
-                    {Object.keys(currentSessionData.aggregatedData.byAgent || {}).length}
-                  </p>
-                </div>
-              </div>
-              
-              {showAggregatedData && (
-                <div className="space-y-4 mt-4">
-                  {/* By Point of Sale */}
-                  {currentSessionData.aggregatedData.byPointOfSale && Object.keys(currentSessionData.aggregatedData.byPointOfSale).length > 0 && (
-                    <div className="bg-white rounded-lg p-4 border border-indigo-200">
-                      <h4 className="text-sm font-semibold text-slate-700 mb-3">Theo Điểm thu</h4>
-                      <div className="space-y-2 max-h-40 overflow-y-auto">
-                        {Object.entries(currentSessionData.aggregatedData.byPointOfSale).map(([pos, data]) => (
-                          <div key={pos} className="flex justify-between items-center text-sm border-b border-slate-100 pb-2">
-                            <span className="font-mono text-xs text-slate-600">{pos}</span>
-                            <div className="flex items-center space-x-3 text-xs">
-                              <span className="text-slate-500">{data.totalTransactions} GD</span>
-                              <span className="text-emerald-600 font-medium">{data.matchedCount} khớp</span>
-                              <span className="text-red-600 font-medium">{data.errorCount} lỗi</span>
-                              <span className="text-slate-700 font-semibold">{data.totalAmount.toLocaleString('vi-VN')}đ</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+              {currentSessionData.aggregatedData ? (
+                <>
+                  <div className="grid grid-cols-3 gap-4 mb-4">
+                    <div className="bg-white rounded-lg p-3 border border-indigo-200">
+                      <p className="text-xs text-slate-600 mb-1">Mã giao dịch</p>
+                      <p className="text-lg font-bold text-indigo-700">
+                        {Object.keys(currentSessionData.aggregatedData.byTransactionCode || {}).length}
+                      </p>
                     </div>
-                  )}
-                  
-                  {/* By Agent */}
-                  {currentSessionData.aggregatedData.byAgent && Object.keys(currentSessionData.aggregatedData.byAgent).length > 0 && (
-                    <div className="bg-white rounded-lg p-4 border border-indigo-200">
-                      <h4 className="text-sm font-semibold text-slate-700 mb-3">Theo Đại lý</h4>
-                      <div className="space-y-2 max-h-40 overflow-y-auto">
-                        {Object.entries(currentSessionData.aggregatedData.byAgent).map(([agentId, data]) => {
-                          const agent = agents.find(a => a.id === agentId);
-                          return (
-                            <div key={agentId} className="flex justify-between items-center text-sm border-b border-slate-100 pb-2">
-                              <span className="text-slate-700 font-medium">{agent?.name || agentId}</span>
-                              <div className="flex items-center space-x-3 text-xs">
-                                <span className="text-slate-500">{data.totalTransactions} GD</span>
-                                <span className="text-emerald-600 font-medium">{data.matchedCount} khớp</span>
-                                <span className="text-red-600 font-medium">{data.errorCount} lỗi</span>
-                                <span className="text-slate-700 font-semibold">{data.totalAmount.toLocaleString('vi-VN')}đ</span>
+                    <div className="bg-white rounded-lg p-3 border border-indigo-200">
+                      <p className="text-xs text-slate-600 mb-1">Điểm thu</p>
+                      <p className="text-lg font-bold text-indigo-700">
+                        {Object.keys(currentSessionData.aggregatedData.byPointOfSale || {}).length}
+                      </p>
+                    </div>
+                    <div className="bg-white rounded-lg p-3 border border-indigo-200">
+                      <p className="text-xs text-slate-600 mb-1">Đại lý</p>
+                      <p className="text-lg font-bold text-indigo-700">
+                        {Object.keys(currentSessionData.aggregatedData.byAgent || {}).length}
+                      </p>
+                    </div>
+                  </div>
+              
+                  {showAggregatedData && (
+                    <div className="space-y-4 mt-4">
+                      {/* By Point of Sale */}
+                      {currentSessionData.aggregatedData.byPointOfSale && Object.keys(currentSessionData.aggregatedData.byPointOfSale).length > 0 && (
+                        <div className="bg-white rounded-lg p-4 border border-indigo-200">
+                          <h4 className="text-sm font-semibold text-slate-700 mb-3">Theo Điểm thu</h4>
+                          <div className="space-y-2 max-h-40 overflow-y-auto">
+                            {Object.entries(currentSessionData.aggregatedData.byPointOfSale).map(([pos, data]) => (
+                              <div key={pos} className="flex justify-between items-center text-sm border-b border-slate-100 pb-2">
+                                <span className="font-mono text-xs text-slate-600">{pos}</span>
+                                <div className="flex items-center space-x-3 text-xs">
+                                  <span className="text-slate-500">{data.totalTransactions} GD</span>
+                                  <span className="text-emerald-600 font-medium">{data.matchedCount} khớp</span>
+                                  <span className="text-red-600 font-medium">{data.errorCount} lỗi</span>
+                                  <span className="text-slate-700 font-semibold">{data.totalAmount.toLocaleString('vi-VN')}đ</span>
+                                </div>
                               </div>
-                            </div>
-                          );
-                        })}
-                      </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* By Agent */}
+                      {currentSessionData.aggregatedData.byAgent && Object.keys(currentSessionData.aggregatedData.byAgent).length > 0 && (
+                        <div className="bg-white rounded-lg p-4 border border-indigo-200">
+                          <h4 className="text-sm font-semibold text-slate-700 mb-3">Theo Đại lý</h4>
+                          <div className="space-y-2 max-h-40 overflow-y-auto">
+                            {Object.entries(currentSessionData.aggregatedData.byAgent).map(([agentId, data]) => {
+                              const agent = agents.find(a => a.id === agentId);
+                              return (
+                                <div key={agentId} className="flex justify-between items-center text-sm border-b border-slate-100 pb-2">
+                                  <span className="text-slate-700 font-medium">{agent?.name || agentId}</span>
+                                  <div className="flex items-center space-x-3 text-xs">
+                                    <span className="text-slate-500">{data.totalTransactions} GD</span>
+                                    <span className="text-emerald-600 font-medium">{data.matchedCount} khớp</span>
+                                    <span className="text-red-600 font-medium">{data.errorCount} lỗi</span>
+                                    <span className="text-slate-700 font-semibold">{data.totalAmount.toLocaleString('vi-VN')}đ</span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                      
+                      <p className="text-xs text-slate-500 mt-2">
+                        💡 Dữ liệu tổng hợp này được dùng để phát hiện bill bổ sung/quên và tăng tốc độ truy vấn báo cáo
+                      </p>
                     </div>
                   )}
-                  
-                  <p className="text-xs text-slate-500 mt-2">
-                    💡 Dữ liệu tổng hợp này được dùng để phát hiện bill bổ sung/quên và tăng tốc độ truy vấn báo cáo
-                  </p>
+                </>
+              ) : (
+                <div className="text-center py-4 text-slate-500 text-sm">
+                  <p>Đang tải dữ liệu tổng hợp...</p>
+                  <p className="text-xs mt-1">Dữ liệu sẽ được hiển thị sau khi đối soát hoàn tất</p>
                 </div>
               )}
             </div>
