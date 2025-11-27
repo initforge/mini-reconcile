@@ -1797,8 +1797,131 @@ const ReconciliationModule: React.FC = () => {
       const sessionRecords = await ReconciliationService.getRecordsBySession(sessionId);
       
       if (session && sessionRecords) {
+        // Nếu session không có aggregatedData, tính lại từ records
+        let aggregatedData = session.aggregatedData;
+        
+        if (!aggregatedData || !aggregatedData.byTransactionCode || Object.keys(aggregatedData.byTransactionCode).length === 0) {
+          console.log('⚠️ Session không có aggregatedData, tính lại từ records...');
+          
+          // Tính lại aggregatedData từ records
+          aggregatedData = {
+            byTransactionCode: {} as Record<string, {
+              transactionCode: string;
+              pointOfSaleName?: string;
+              agentId?: string;
+              merchantAmount: number;
+              agentAmount: number;
+              status: TransactionStatus;
+              lastProcessedAt: string;
+              sessionIds: string[];
+            }>,
+            byPointOfSale: {} as Record<string, {
+              pointOfSaleName: string;
+              totalTransactions: number;
+              totalAmount: number;
+              matchedCount: number;
+              errorCount: number;
+            }>,
+            byAgent: {} as Record<string, {
+              agentId: string;
+              totalTransactions: number;
+              totalAmount: number;
+              matchedCount: number;
+              errorCount: number;
+            }>
+          };
+          
+          sessionRecords.forEach(record => {
+            const agentId = record.agentData?.agentId;
+            const amount = record.merchantData?.amount || 0;
+            const transactionCode = record.transactionCode;
+            const pointOfSaleName = record.pointOfSaleName;
+            
+            // byTransactionCode
+            if (!aggregatedData.byTransactionCode[transactionCode]) {
+              aggregatedData.byTransactionCode[transactionCode] = {
+                transactionCode,
+                pointOfSaleName,
+                agentId,
+                merchantAmount: record.merchantAmount || 0,
+                agentAmount: record.agentAmount || 0,
+                status: record.status,
+                lastProcessedAt: record.processedAt,
+                sessionIds: [sessionId]
+              };
+            }
+            
+            // byPointOfSale
+            if (pointOfSaleName) {
+              if (!aggregatedData.byPointOfSale[pointOfSaleName]) {
+                aggregatedData.byPointOfSale[pointOfSaleName] = {
+                  pointOfSaleName,
+                  totalTransactions: 0,
+                  totalAmount: 0,
+                  matchedCount: 0,
+                  errorCount: 0
+                };
+              }
+              const posData = aggregatedData.byPointOfSale[pointOfSaleName];
+              posData.totalTransactions++;
+              posData.totalAmount += amount;
+              if (record.status === TransactionStatus.MATCHED) {
+                posData.matchedCount++;
+              } else {
+                posData.errorCount++;
+              }
+            }
+            
+            // byAgent
+            if (agentId) {
+              if (!aggregatedData.byAgent[agentId]) {
+                aggregatedData.byAgent[agentId] = {
+                  agentId,
+                  totalTransactions: 0,
+                  totalAmount: 0,
+                  matchedCount: 0,
+                  errorCount: 0
+                };
+              }
+              const agentData = aggregatedData.byAgent[agentId];
+              agentData.totalTransactions++;
+              agentData.totalAmount += amount;
+              if (record.status === TransactionStatus.MATCHED) {
+                agentData.matchedCount++;
+              } else {
+                agentData.errorCount++;
+              }
+            }
+          });
+          
+          console.log('✅ Đã tính lại aggregatedData:', {
+            byTransactionCode: Object.keys(aggregatedData.byTransactionCode).length,
+            byPointOfSale: Object.keys(aggregatedData.byPointOfSale).length,
+            byAgent: Object.keys(aggregatedData.byAgent).length
+          });
+          
+          // Lưu lại vào Firebase để lần sau không cần tính lại
+          try {
+            await ReconciliationService.updateSession(sessionId, {
+              aggregatedData: aggregatedData
+            });
+            console.log('✅ Đã lưu aggregatedData vào Firebase');
+          } catch (e) {
+            console.warn('⚠️ Không thể lưu aggregatedData vào Firebase:', e);
+          }
+        } else {
+          console.log('✅ Session đã có aggregatedData:', {
+            byTransactionCode: Object.keys(aggregatedData.byTransactionCode).length,
+            byPointOfSale: Object.keys(aggregatedData.byPointOfSale).length,
+            byAgent: Object.keys(aggregatedData.byAgent).length
+          });
+        }
+        
         setCurrentSessionId(sessionId);
-        setCurrentSessionData(session);
+        setCurrentSessionData({
+          ...session,
+          aggregatedData: aggregatedData // Đảm bảo aggregatedData được set
+        });
         setRecords(sessionRecords);
         setStep(3);
         setShowHistory(false);
