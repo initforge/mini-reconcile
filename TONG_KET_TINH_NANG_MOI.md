@@ -7,76 +7,30 @@
 
 ## 🎯 1. TỰ ĐỘNG LINK ĐẠI LÝ BẰNG SỐ TÀI KHOẢN NGÂN HÀNG
 
-### 📌 Mô tả
-Khi đại lý upload ảnh bill, hệ thống tự động đọc số tài khoản ngân hàng từ ảnh VNPay và tìm đại lý tương ứng trong hệ thống.
+### 📍 Sẽ thấy ở đâu:
+- **Quản lý Đại lý** → Form thêm/sửa đại lý → Field "Số tài khoản ngân hàng"
 
-### ✅ Lợi ích
-- ⚡ **Tự động hóa**: Không cần nhập tay, giảm thiểu sai sót
-- 🎯 **Chính xác**: Tự động khớp dựa trên số tài khoản
-- ⏱️ **Nhanh chóng**: Tăng tốc độ xử lý đối soát
+### 🔍 Làm gì sẽ thấy:
+1. Nhập số tài khoản ngân hàng vào form đại lý
+2. Upload ảnh bill trong **Đối soát**
+3. Hệ thống tự động link đại lý (không cần chọn tay)
 
-### 📖 Hướng dẫn sử dụng
-
-**Bước 1: Cấu hình Đại lý**
-1. Vào **Quản lý Đại lý** → Chọn **Thêm mới** hoặc **Sửa**
-2. Nhập **Số tài khoản ngân hàng** (số này chính là số hiển thị trên ảnh VNPay)
-3. Lưu thông tin
-
-**Bước 2: Upload ảnh Bill**
-- Khi upload ảnh screenshot từ app VNPay
-- Hệ thống tự động OCR và đọc số tài khoản ngân hàng
-- Tự động link với đại lý có số tài khoản khớp
-
-### ⚠️ Lưu ý quan trọng
-> **Số tài khoản ngân hàng** này chính là số hiển thị trên ảnh VNPay (có thể trùng với số điện thoại, nhưng đây là số tài khoản ngân hàng, không phải số điện thoại liên hệ).
+### ⚠️ Lưu ý
+Số tài khoản ngân hàng = số hiển thị trên ảnh VNPay (có thể trùng số điện thoại, nhưng đây là số TK ngân hàng)
 
 ---
 
 <div style="page-break-after: always;"></div>
 
-## 💰 2. CHIẾT KHẤU THEO TỪNG ĐIỂM THU (Workflow mới)
+## 💰 2. CHIẾT KHẤU THEO TỪNG ĐIỂM THU
 
-### 📌 Mô tả
-Thay vì cấu hình chiết khấu chung cho tất cả điểm thu, giờ có thể cấu hình riêng cho từng điểm thu mà đại lý được phép xử lý.
+### 📍 Sẽ thấy ở đâu:
+- **Quản lý Đại lý** → Form thêm/sửa → Phần "Bước 1: Gán Điểm thu" và "Bước 2: Cấu hình Chiết khấu"
 
-### ✅ Lợi ích
-- 🔄 **Linh hoạt**: Mỗi điểm thu có thể có mức chiết khấu khác nhau
-- 📊 **Chính xác**: Phù hợp với thực tế kinh doanh
-- 🎯 **Tối ưu**: Tính toán phí chính xác hơn
-
-### 📖 Hướng dẫn sử dụng
-
-**Workflow 2 bước:**
-
-#### **Bước 1: Gán Điểm thu**
-1. Vào **Quản lý Đại lý** → Thêm/Sửa đại lý
-2. Tìm phần **"Bước 1: Gán Điểm thu"**
-3. Chọn các điểm thu mà đại lý được phép xử lý (checkbox)
-4. Có thể chọn nhiều điểm thu cùng lúc
-
-#### **Bước 2: Cấu hình Chiết khấu**
-1. Sau khi gán điểm thu, phần **"Bước 2: Cấu hình Chiết khấu theo Điểm thu"** sẽ hiển thị
-2. Với mỗi điểm thu đã gán, cấu hình chiết khấu cho:
-   - **QR 1 (VNPay)**: X%
-   - **QR 2 (App Bank)**: X%
-   - **Sofpos**: X%
-   - **POS**: X%
+### 🔍 Làm gì sẽ thấy:
+1. **Bước 1**: Chọn các điểm thu (checkbox)
+2. **Bước 2**: Với mỗi điểm thu đã chọn, cấu hình chiết khấu riêng (QR 1, QR 2, Sofpos, POS)
 3. Mỗi điểm thu có thể có mức chiết khấu khác nhau
-
-### 📊 Ví dụ
-```
-Điểm thu: ANCATTUONG66PKV01
-- QR 1 (VNPay): 2.5%
-- QR 2 (App Bank): 2.0%
-- Sofpos: 1.8%
-- POS: 1.5%
-
-Điểm thu: MINH THAO 122PVD 01
-- QR 1 (VNPay): 3.0%
-- QR 2 (App Bank): 2.5%
-- Sofpos: 2.0%
-- POS: 1.8%
-```
 
 ---
 
@@ -84,44 +38,13 @@ Thay vì cấu hình chiết khấu chung cho tất cả điểm thu, giờ có 
 
 ## ✏️ 3. SỬA THỦ CÔNG GIAO DỊCH
 
-### 📌 Mô tả
-Admin/CSO có thể sửa thủ công các thông tin giao dịch sau khi đối soát để xử lý các trường hợp đặc biệt.
+### 📍 Sẽ thấy ở đâu:
+- **Đối soát** → Bước 3: Kết quả → Bảng kết quả → Cột "Thao tác" → Nút **Sửa**
 
-### ✅ Lợi ích
-- 🔧 **Linh hoạt**: Xử lý các trường hợp đặc biệt
-- 🐛 **Sửa lỗi**: Điều chỉnh dữ liệu khi OCR sai
-- 📝 **Theo dõi**: Lưu lịch sử mọi thay đổi
-
-### 📖 Hướng dẫn sử dụng
-
-**Bước 1: Mở màn hình Sửa**
-1. Sau khi đối soát, vào bảng kết quả
-2. Tìm giao dịch cần sửa
-3. Click nút **Sửa** ở cột "Thao tác"
-
-**Bước 2: Sửa thông tin**
-Có thể sửa các thông tin sau:
-- **Mã chuẩn chi**: Sửa mã giao dịch
-- **Số tiền Merchant**: Số tiền từ hệ thống
-- **Số tiền Agent**: Số tiền từ bill đại lý
-- **Điểm thu**: Chọn điểm thu từ dropdown
-- **Đại lý**: Chọn đại lý từ dropdown
-- **Ghi chú**: Thêm ghi chú về thay đổi
-
-**Bước 3: Lưu thay đổi**
-1. Click **Lưu thay đổi**
-2. Hệ thống tự động:
-   - Tính lại trạng thái (khớp/lỗi)
-   - Lưu lịch sử thay đổi
-   - Cập nhật vào database
-
-### 📋 Lịch sử thay đổi
-Mọi thay đổi đều được lưu với thông tin:
-- Field đã thay đổi
-- Giá trị cũ
-- Giá trị mới
-- Thời gian thay đổi
-- Người thay đổi
+### 🔍 Làm gì sẽ thấy:
+1. Click nút **Sửa** ở dòng giao dịch cần sửa
+2. Modal hiện ra cho phép sửa: mã chuẩn chi, số tiền, điểm thu, đại lý
+3. Click **Lưu thay đổi** → Hệ thống tự động tính lại trạng thái
 
 ---
 
@@ -129,31 +52,13 @@ Mọi thay đổi đều được lưu với thông tin:
 
 ## 🏪 4. GÁN ĐIỂM BÁN KHI OCR KHÔNG TÌM THẤY
 
-### 📌 Mô tả
-Khi OCR không đọc được điểm bán từ ảnh (do chất lượng ảnh kém, ảnh không rõ), có thể chọn thủ công từ danh sách điểm bán đã khai báo.
+### 📍 Sẽ thấy ở đâu:
+- **Đối soát** → Bước 3: Kết quả → Bảng kết quả → Cột "Điểm thu" → Dropdown
 
-### ✅ Lợi ích
-- 🔧 **Xử lý lỗi**: Khắc phục khi OCR không đọc được
-- ⚡ **Nhanh chóng**: Chọn từ dropdown, không cần nhập lại
-- ✅ **Chính xác**: Đảm bảo dữ liệu đúng
-
-### 📖 Hướng dẫn sử dụng
-
-**Khi nào cần dùng:**
-- OCR không đọc được điểm bán từ ảnh
-- Ảnh chất lượng kém, không rõ
-- Điểm bán không có trong ảnh
-
-**Cách thực hiện:**
-1. Trong bảng kết quả đối soát
-2. Tìm giao dịch có cột "Điểm thu" hiển thị **"Chưa có điểm bán"**
-3. Click vào dropdown
-4. Chọn điểm bán từ danh sách đã khai báo
-5. Hệ thống tự động cập nhật
-
-### 💡 Mẹo
-- Nên kiểm tra ảnh gốc để xác nhận điểm bán
-- Có thể sửa thủ công sau khi đối soát xong
+### 🔍 Làm gì sẽ thấy:
+1. Nếu OCR không đọc được điểm bán → Cột "Điểm thu" hiển thị "Chưa có điểm bán"
+2. Click dropdown → Chọn điểm bán từ danh sách
+3. Hệ thống tự động cập nhật
 
 ---
 
@@ -161,46 +66,20 @@ Khi OCR không đọc được điểm bán từ ảnh (do chất lượng ảnh
 
 ## 🚨 5. BÁO LỖI CHI TIẾT VÀ PHÂN LOẠI
 
-### 📌 Mô tả
-Hệ thống phân loại và hiển thị rõ ràng các loại lỗi với icon và màu sắc riêng, giúp dễ dàng xác định nguyên nhân.
+### 📍 Sẽ thấy ở đâu:
+- **Đối soát** → Bước 3: Kết quả → Card "Phân loại lỗi chi tiết" (ngay dưới Summary Banner)
+- Bảng kết quả → Cột "Trạng thái" → Badge màu
+- Filter Bar → Dropdown "Tất cả lỗi" → Chọn loại lỗi
 
-### ✅ Lợi ích
-- 🎯 **Rõ ràng**: Dễ dàng xác định loại lỗi
-- ⚡ **Nhanh chóng**: Xử lý lỗi nhanh hơn
-- 📊 **Thống kê**: Dễ dàng thống kê các loại lỗi
-
-### 📋 Các loại lỗi
-
-#### 🔴 **Sai số tiền** (WRONG_AMOUNT)
-- **Mô tả**: Số tiền Merchant ≠ Số tiền Agent
-- **Ví dụ**: Merchant: 100,000đ, Agent: 95,000đ
-- **Xử lý**: Kiểm tra lại bill gốc, yêu cầu đại lý up lại
-
-#### 🟣 **Sai điểm bán** (WRONG_POINT_OF_SALE)
-- **Mô tả**: Điểm bán từ OCR không khớp với điểm bán trong hệ thống
-- **Ví dụ**: OCR đọc "ANCATTUONG", hệ thống có "ANCATTUONG66PKV01"
-- **Xử lý**: Gán lại điểm bán thủ công hoặc sửa thông tin điểm bán
-
-#### 🟡 **Sai đại lý** (WRONG_AGENT)
-- **Mô tả**: Đại lý claim bill không đúng với điểm bán
-- **Ví dụ**: Bill thuộc điểm bán A nhưng đại lý B claim
-- **Xử lý**: Chuyển bill cho đại lý đúng hoặc sửa thủ công
-
-#### 🟠 **Trùng lặp** (DUPLICATE)
-- **Mô tả**: Bill bị trùng trong cùng đại lý hoặc khác đại lý
-- **Ví dụ**: Cùng một mã chuẩn chi xuất hiện 2 lần
-- **Xử lý**: Xóa bill trùng, chỉ giữ lại 1 bill
-
-#### ⚠️ **Không tìm thấy** (MISSING)
-- **MISSING_IN_MERCHANT**: Bill không có trong hệ thống Merchant
-- **MISSING_IN_AGENT**: Agent chưa up bill
-- **Xử lý**: Kiểm tra lại dữ liệu, yêu cầu up lại
-
-### 📊 Hiển thị trong bảng kết quả
-Mỗi loại lỗi có:
-- **Icon riêng**: Dễ nhận biết
-- **Màu sắc riêng**: Phân biệt trực quan
-- **Mô tả chi tiết**: Giải thích rõ nguyên nhân
+### 🔍 Làm gì sẽ thấy:
+1. Sau khi đối soát xong → Thấy card với 5 loại lỗi:
+   - 🔴 **Sai số tiền** (đỏ)
+   - 🟣 **Sai điểm bán** (tím)
+   - 🟡 **Sai đại lý** (hồng)
+   - 🟠 **Trùng lặp** (cam)
+   - ⚠️ **Không tìm thấy** (vàng)
+2. Trong bảng: Mỗi bill lỗi có badge màu tương ứng
+3. Filter: Click "Lỗi" → Chọn loại lỗi → Chỉ thấy bill loại đó
 
 ---
 
@@ -208,48 +87,14 @@ Mỗi loại lỗi có:
 
 ## 🔍 6. LỌC VÀ XUẤT BILL LỖI
 
-### 📌 Mô tả
-Có thể lọc chỉ xem các bill lỗi và xuất ra file Excel để đại lý up lại hoặc xử lý sau.
+### 📍 Sẽ thấy ở đâu:
+- **Đối soát** → Bước 3: Kết quả → Filter Bar → Nút "Lỗi" + Dropdown loại lỗi
+- Action Bar → Nút **"Xuất Bill lỗi"** (màu vàng)
 
-### ✅ Lợi ích
-- 🎯 **Tập trung**: Chỉ xem các bill cần xử lý
-- 📊 **Theo dõi**: Dễ dàng theo dõi và quản lý lỗi
-- 📄 **Xuất file**: Xuất Excel để gửi đại lý
-
-### 📖 Hướng dẫn sử dụng
-
-**Bước 1: Lọc Bill lỗi**
-1. Sau khi đối soát, vào bảng kết quả
-2. Tìm phần **"Lọc"** ở trên bảng
-3. Click **"Lỗi"** để chỉ hiển thị các bill lỗi
-
-**Bước 2: Lọc theo loại lỗi (tùy chọn)**
-1. Sau khi chọn "Lỗi", dropdown loại lỗi sẽ hiển thị
-2. Chọn loại lỗi cụ thể:
-   - Tất cả lỗi
-   - Sai điểm bán
-   - Sai số tiền
-   - Sai đại lý
-   - Trùng lặp
-   - Không tìm thấy (Merchant)
-   - Không tìm thấy (Agent)
-
-**Bước 3: Xuất Bill lỗi**
-1. Click nút **"Xuất Bill lỗi"** (màu vàng)
-2. File Excel sẽ được tải xuống với tên: `Bill_loi_YYYY-MM-DD.xlsx`
-3. File chứa các cột:
-   - Mã chuẩn chi
-   - Điểm thu
-   - Số tiền Agent
-   - Số tiền Merchant
-   - Loại lỗi
-   - Chi tiết lỗi
-
-### 📄 Format file Excel
-- Header màu xanh, chữ trắng
-- Dòng xen kẽ màu xám nhạt
-- Định dạng số tiền với dấu phẩy
-- Dễ đọc và in ấn
+### 🔍 Làm gì sẽ thấy:
+1. Click **"Lỗi"** trong Filter → Chỉ thấy bill lỗi
+2. Chọn loại lỗi cụ thể từ dropdown (tùy chọn)
+3. Click **"Xuất Bill lỗi"** → Tải file Excel `Bill_loi_YYYY-MM-DD.xlsx`
 
 ---
 
@@ -257,46 +102,21 @@ Có thể lọc chỉ xem các bill lỗi và xuất ra file Excel để đại 
 
 ## 💾 7. LƯU DỮ LIỆU TỔNG HỢP
 
-### 📌 Mô tả
-Hệ thống tự động lưu dữ liệu tổng hợp (aggregated data) theo mã giao dịch, điểm thu, đại lý để tối ưu hiệu năng và xử lý bill bổ sung.
+### 📍 Sẽ thấy ở đâu:
+- **Đối soát** → Bước 3: Kết quả → Card **"Dữ liệu Tổng hợp (Aggregated Data)"** (màu xanh dương, sau Summary Banner)
 
-### ✅ Lợi ích
-- ⚡ **Hiệu năng**: Tăng tốc độ truy vấn báo cáo (10-100x nhanh hơn)
-- 🔄 **Bill bổ sung**: Xử lý bill quên/thiếu sau này
-- 🔍 **Duplicate**: Phát hiện duplicate cross-session
-- 📊 **Báo cáo**: Tạo báo cáo nhanh chóng
+### 🔍 Làm gì sẽ thấy:
+1. Sau khi đối soát xong → Thấy card với 3 số liệu:
+   - Mã giao dịch: X
+   - Điểm thu: Y
+   - Đại lý: Z
+2. Click **"Xem chi tiết"** → Mở rộng hiển thị:
+   - **Theo Điểm thu**: Danh sách điểm thu với số GD, khớp, lỗi, tổng tiền
+   - **Theo Đại lý**: Danh sách đại lý với số GD, khớp, lỗi, tổng tiền
 
-### 📋 Cấu trúc dữ liệu tổng hợp
-
-#### **Theo Mã giao dịch** (byTransactionCode)
-- Mã chuẩn chi
-- Điểm thu
-- Đại lý
-- Số tiền Merchant
-- Số tiền Agent
-- Trạng thái
-- Thời gian xử lý cuối
-- Danh sách session đã xử lý
-
-#### **Theo Điểm thu** (byPointOfSale)
-- Tên điểm thu
-- Tổng số giao dịch
-- Tổng số tiền
-- Số giao dịch khớp
-- Số giao dịch lỗi
-
-#### **Theo Đại lý** (byAgent)
-- ID đại lý
-- Tổng số giao dịch
-- Tổng số tiền
-- Số giao dịch khớp
-- Số giao dịch lỗi
-
-### 🔄 Tự động cập nhật
-Dữ liệu tổng hợp được tự động cập nhật mỗi khi:
-- Tạo session đối soát mới
-- Xử lý bill bổ sung
-- Sửa thủ công giao dịch
+### 💡 Mục đích
+- Phát hiện bill bổ sung/quên
+- Tăng tốc độ truy vấn báo cáo (10-100x nhanh hơn)
 
 ---
 
@@ -304,56 +124,34 @@ Dữ liệu tổng hợp được tự động cập nhật mỗi khi:
 
 ## 📦 8. XỬ LÝ BILL BỔ SUNG
 
-### 📌 Mô tả
-Khi đại lý up bill bổ sung/quên sau khi đã đối soát, hệ thống tự động phát hiện và báo lỗi nếu bill đã được xử lý trước đó.
+### 📍 Sẽ thấy ở đâu:
+- **Đối soát** → Bước 3: Kết quả → Bảng kết quả → Badge **"Trùng lặp"** (màu cam)
 
-### ✅ Lợi ích
-- 🚫 **Tránh trùng**: Phát hiện bill đã xử lý
-- ✅ **Chính xác**: Đảm bảo không thanh toán trùng
-- 📊 **Theo dõi**: Biết bill nào đã xử lý, bill nào mới
-
-### 📖 Cách hoạt động
-
-**Khi upload bill bổ sung:**
-1. Hệ thống kiểm tra mã chuẩn chi trong dữ liệu tổng hợp
-2. Nếu tìm thấy bill đã xử lý:
-   - Hiển thị lỗi: **"Bill đã được xử lý trong session trước"**
-   - Ghi rõ session ID đã xử lý
-   - Đánh dấu là bill bổ sung/quên
-3. Nếu không tìm thấy:
-   - Xử lý bình thường như bill mới
-
-### 🔍 Kiểm tra Cross-Session
-Hệ thống kiểm tra bill trong:
-- Tất cả các session đã xử lý
-- Dữ liệu tổng hợp (aggregated data)
-- Các reconciliation records
-
-### ⚠️ Lưu ý
-- Bill bổ sung sẽ được đánh dấu là **DUPLICATE** với loại lỗi đặc biệt
-- Cần kiểm tra kỹ trước khi thanh toán để tránh trùng
-- Có thể xem lịch sử session để biết bill đã được xử lý khi nào
+### 🔍 Làm gì sẽ thấy:
+1. Đối soát lần 1: Upload bill → Khớp bình thường
+2. Đối soát lần 2: Upload lại bill có mã chuẩn chi trùng
+3. Hệ thống tự động phát hiện → Badge **"Trùng lặp"** + Chi tiết: **"Bill đã được xử lý trong session trước (session_id)"**
 
 ---
 
 <div style="page-break-after: always;"></div>
 
-## 📊 TỔNG KẾT
+## 📊 TỔNG KẾT VỊ TRÍ
 
-### 🎯 Các tính năng mới giúp:
-- ⚡ **Tăng tốc độ**: Tự động hóa nhiều thao tác
-- ✅ **Tăng độ chính xác**: Phát hiện và xử lý lỗi tốt hơn
-- 📊 **Dễ quản lý**: Dữ liệu tổng hợp, báo cáo chi tiết
-- 🔧 **Linh hoạt**: Sửa thủ công, xử lý trường hợp đặc biệt
-
-### 📞 Hỗ trợ
-Nếu có vấn đề hoặc câu hỏi, vui lòng liên hệ:
-- **Email**: support@upcode.com
-- **Hotline**: [Số điện thoại]
+| Tính năng | Vị trí hiển thị |
+|-----------|----------------|
+| **1. Auto-link đại lý** | Quản lý Đại lý → Form → Field "Số tài khoản ngân hàng" |
+| **2. Chiết khấu theo điểm thu** | Quản lý Đại lý → Form → Bước 1 & 2 |
+| **3. Sửa thủ công** | Đối soát → Bước 3 → Bảng → Cột "Thao tác" → Nút "Sửa" |
+| **4. Gán điểm bán** | Đối soát → Bước 3 → Bảng → Cột "Điểm thu" → Dropdown |
+| **5. Báo lỗi chi tiết** | Đối soát → Bước 3 → Card "Phân loại lỗi chi tiết" + Badge màu |
+| **6. Lọc & xuất bill lỗi** | Đối soát → Bước 3 → Filter Bar + Nút "Xuất Bill lỗi" |
+| **7. Dữ liệu tổng hợp** | Đối soát → Bước 3 → Card "Dữ liệu Tổng hợp" → "Xem chi tiết" |
+| **8. Bill bổ sung** | Đối soát → Bước 3 → Badge "Trùng lặp" khi upload bill trùng |
 
 ---
 
-**Phiên bản**: 2.0  
-**Ngày cập nhật**: 2025-11-18  
-**Tác giả**: PayReconcile Pro Team
+**Lưu ý**: Tất cả tính năng ở **Bước 3: Kết quả** chỉ hiển thị **SAU KHI ĐỐI SOÁT XONG**
 
+**Phiên bản**: 2.0  
+**Ngày cập nhật**: 2025-11-18
