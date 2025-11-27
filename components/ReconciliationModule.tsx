@@ -2082,11 +2082,49 @@ const ReconciliationModule: React.FC = () => {
                              
                              {/* File name and extracted data */}
                              <div className="p-2 text-xs">
-                               <div className="font-medium truncate">{file.name}</div>
+                               <div className="font-medium truncate mb-1">{file.name}</div>
                                {ocrResult?.result && (
-                                 <div className="mt-1 text-slate-600">
-                                   <div>Mã GD: {ocrResult.result.transactionCode.substring(0, 10)}...</div>
-                                   <div>Tiền: {ocrResult.result.amount.toLocaleString('vi-VN')}đ</div>
+                                 <div className="mt-1 space-y-0.5 text-slate-600">
+                                   <div className="flex items-center justify-between">
+                                     <span className="text-slate-500">Mã GD:</span>
+                                     <span className="font-mono font-semibold text-slate-800" title={ocrResult.result.transactionCode}>
+                                       {ocrResult.result.transactionCode.length > 12 
+                                         ? `${ocrResult.result.transactionCode.substring(0, 12)}...`
+                                         : ocrResult.result.transactionCode}
+                                     </span>
+                                   </div>
+                                   <div className="flex items-center justify-between">
+                                     <span className="text-slate-500">Tiền:</span>
+                                     <span className="font-semibold text-emerald-700">
+                                       {ocrResult.result.amount.toLocaleString('vi-VN')}₫
+                                     </span>
+                                   </div>
+                                   {ocrResult.result.pointOfSaleName && (
+                                     <div className="flex items-center justify-between">
+                                       <span className="text-slate-500">Điểm bán:</span>
+                                       <span className="font-medium text-indigo-700 truncate max-w-[100px]" title={ocrResult.result.pointOfSaleName}>
+                                         {ocrResult.result.pointOfSaleName.length > 15
+                                           ? `${ocrResult.result.pointOfSaleName.substring(0, 15)}...`
+                                           : ocrResult.result.pointOfSaleName}
+                                       </span>
+                                     </div>
+                                   )}
+                                   {ocrResult.result.bankAccount && (
+                                     <div className="flex items-center justify-between">
+                                       <span className="text-slate-500">TK NH:</span>
+                                       <span className="font-mono text-blue-700" title={ocrResult.result.bankAccount}>
+                                         {ocrResult.result.bankAccount}
+                                       </span>
+                                     </div>
+                                   )}
+                                   {ocrResult.result.invoiceNumber && (
+                                     <div className="flex items-center justify-between">
+                                       <span className="text-slate-500">Hóa đơn:</span>
+                                       <span className="font-medium text-purple-700">
+                                         {ocrResult.result.invoiceNumber}
+                                       </span>
+                                     </div>
+                                   )}
                                  </div>
                                )}
                                {ocrResult?.error && (
