@@ -635,11 +635,10 @@ const ReconciliationModule: React.FC = () => {
           const result = await extractTransactionFromImage(base64, agentIdFromFile);
           
           // Auto-link agent bằng bankAccount (số tài khoản ngân hàng) nếu có
-          if (result.paymentPhone) {
-            // paymentPhone từ OCR thực chất là bankAccount (số tài khoản ngân hàng)
-            const ocrBankAccount = result.paymentPhone.replace(/[^\d]/g, '');
+          if (result.bankAccount) {
+            const ocrBankAccount = result.bankAccount.replace(/[^\d]/g, '');
             const matchedAgent = agents.find(a => {
-              const agentBankAccount = a.bankAccount.replace(/[^\d]/g, '');
+              const agentBankAccount = a.bankAccount?.replace(/[^\d]/g, '') || '';
               return agentBankAccount && agentBankAccount === ocrBankAccount;
             });
             
@@ -714,20 +713,19 @@ const ReconciliationModule: React.FC = () => {
       const agentIdFromFile = file.name.replace(/\.(jpg|jpeg|png|webp)$/i, '').toUpperCase() || 'unknown';
       const result = await extractTransactionFromImage(base64, agentIdFromFile);
       
-      // Auto-link agent bằng bankAccount (số tài khoản ngân hàng) nếu có
-      if (result.paymentPhone) {
-        // paymentPhone từ OCR thực chất là bankAccount (số tài khoản ngân hàng)
-        const ocrBankAccount = result.paymentPhone.replace(/[^\d]/g, '');
-        const matchedAgent = agents.find(a => {
-          const agentBankAccount = a.bankAccount.replace(/[^\d]/g, '');
-          return agentBankAccount && agentBankAccount === ocrBankAccount;
-        });
-        
-        if (matchedAgent) {
-          result.agentId = matchedAgent.id;
-          console.log(`🔗 Auto-linked agent: ${matchedAgent.name} (${matchedAgent.code}) via bankAccount: ${ocrBankAccount}`);
+        // Auto-link agent bằng bankAccount (số tài khoản ngân hàng) nếu có
+        if (result.bankAccount) {
+          const ocrBankAccount = result.bankAccount.replace(/[^\d]/g, '');
+          const matchedAgent = agents.find(a => {
+            const agentBankAccount = a.bankAccount?.replace(/[^\d]/g, '') || '';
+            return agentBankAccount && agentBankAccount === ocrBankAccount;
+          });
+          
+          if (matchedAgent) {
+            result.agentId = matchedAgent.id;
+            console.log(`🔗 Auto-linked agent: ${matchedAgent.name} (${matchedAgent.code}) via bankAccount: ${ocrBankAccount}`);
+          }
         }
-      }
       
       updatedResults[index] = { file, result, status: 'success' };
       setAgentOcrResults([...updatedResults]);

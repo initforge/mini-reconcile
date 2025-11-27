@@ -124,8 +124,8 @@ export interface AgentSubmission {
   ocrConfidence?: number; // Độ tin cậy của OCR (0-1)
   // Point of sale from OCR
   pointOfSaleName?: string; // Điểm thu từ OCR
-  // Payment phone from OCR - dùng để auto-link agent
-  paymentPhone?: string; // Số điện thoại thanh toán từ ảnh VNPay (ví dụ: "093451103")
+  // Bank account from OCR - dùng để auto-link agent
+  bankAccount?: string; // Số tài khoản ngân hàng từ ảnh VNPay (ví dụ: "093451103")
 }
 
 export interface ReconciliationRecord {

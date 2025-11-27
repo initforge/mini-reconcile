@@ -337,7 +337,7 @@ Nhiệm vụ: Trích xuất CHÍNH XÁC các thông tin quan trọng từ ảnh 
       imageUrl: imageBase64, // Store base64 for reference
       invoiceNumber: extracted.invoiceNumber ? String(extracted.invoiceNumber).trim() : undefined,
       pointOfSaleName,
-      paymentPhone: bankAccount, // Store bankAccount as paymentPhone for backward compatibility
+      bankAccount: bankAccount, // Số tài khoản ngân hàng từ ảnh VNPay
       ocrConfidence: 0.9 // Default confidence, can be enhanced later
     };
 
