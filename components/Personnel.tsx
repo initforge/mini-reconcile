@@ -76,30 +76,30 @@ const Personnel: React.FC = () => {
     }
 
     try {
-      const userData: User = {
-        id: formData.id,
-        username: formData.username,
-        fullName: formData.fullName,
-        email: formData.email,
-        role: formData.role,
-        department: formData.department,
+    const userData: User = {
+      id: formData.id,
+      username: formData.username,
+      fullName: formData.fullName,
+      email: formData.email,
+      role: formData.role,
+      department: formData.department,
         status: UserStatus.ACTIVE,
         lastActive: editingUser ? editingUser.lastActive : new Date().toISOString(),
         avatarUrl: '',
         createdAt: editingUser?.createdAt || new Date().toISOString()
-      };
+    };
 
-      if (editingUser) {
+    if (editingUser) {
         // Update existing user
         await updateData(`/users/${editingUser.id}`, userData);
         alert('Đã cập nhật thông tin nhân viên thành công!');
-      } else {
+    } else {
         // Add new user
         await writeData(`/users/${userData.id}`, userData);
         alert('Đã thêm nhân viên mới thành công!');
-      }
+    }
 
-      setIsModalOpen(false);
+    setIsModalOpen(false);
     } catch (error) {
       console.error('Error saving user:', error);
       alert('Có lỗi khi lưu thông tin nhân viên');

@@ -209,7 +209,8 @@ Nhiệm vụ: Trích xuất CHÍNH XÁC các thông tin quan trọng từ ảnh 
 2. **amount** (BẮT BUỘC): Số tiền thanh toán (VND) - loại bỏ dấu chấm/phẩy, chuyển thành số nguyên
 3. **invoiceNumber** (TÙY CHỌN): Số hóa đơn nếu có
 4. **pointOfSaleName** (TÙY CHỌN): Tên điểm thu/điểm bán - tìm trong các field: "Điểm bán", "Tên điểm thanh toán", "Payment point", "ĐIỂM BÁN", "Thanh toán cho" (extract phần điểm bán nếu có)
-5. **timestamp** (TÙY CHỌN): Thời gian giao dịch, format ISO string
+5. **bankAccount** (TÙY CHỌN): Số tài khoản ngân hàng - tìm trong field "Số tài khoản", "Số TK", "Account number", "Số điện thoại thanh toán" (ví dụ: "093451103"). Đây chính là số tài khoản ngân hàng hiển thị trên ảnh VNPay, dùng để link với đại lý
+6. **timestamp** (TÙY CHỌN): Thời gian giao dịch, format ISO string
 
 **QUAN TRỌNG:**
 - transactionCode và amount là BẮT BUỘC - nếu không tìm thấy, trả về lỗi
@@ -222,6 +223,7 @@ Nhiệm vụ: Trích xuất CHÍNH XÁC các thông tin quan trọng từ ảnh 
   "amount": 268000,
   "invoiceNumber": "MUA1",
   "pointOfSaleName": "ANCATTUONG66PKV01",
+  "bankAccount": "093451103",
   "timestamp": "2025-11-18T10:28:00.000Z"
 }
 
@@ -314,6 +316,17 @@ Nhiệm vụ: Trích xuất CHÍNH XÁC các thông tin quan trọng từ ảnh 
       if (pointOfSaleName === '') pointOfSaleName = undefined;
     }
 
+    // Extract bank account if available (số tài khoản ngân hàng từ ảnh VNPay)
+    let bankAccount: string | undefined = undefined;
+    if (extracted.bankAccount || extracted.paymentPhone) {
+      // Support both field names for backward compatibility
+      const accountValue = extracted.bankAccount || extracted.paymentPhone;
+      bankAccount = String(accountValue).trim();
+      // Remove any non-digit characters except + (for international numbers)
+      bankAccount = bankAccount.replace(/[^\d+]/g, '');
+      if (bankAccount === '' || bankAccount.length < 8) bankAccount = undefined;
+    }
+
     // Create AgentSubmission object
     const submission: AgentSubmission = {
       id: `agent_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -324,6 +337,7 @@ Nhiệm vụ: Trích xuất CHÍNH XÁC các thông tin quan trọng từ ảnh 
       imageUrl: imageBase64, // Store base64 for reference
       invoiceNumber: extracted.invoiceNumber ? String(extracted.invoiceNumber).trim() : undefined,
       pointOfSaleName,
+      paymentPhone: bankAccount, // Store bankAccount as paymentPhone for backward compatibility
       ocrConfidence: 0.9 // Default confidence, can be enhanced later
     };
 

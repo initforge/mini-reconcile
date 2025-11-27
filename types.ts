@@ -76,13 +76,14 @@ export interface Agent {
   name: string;
   code: string;
   bankAccount: string;
-  discountRates: Record<string, number>; // Percentage - changed to match Firebase
+  discountRates: Record<string, number>; // Percentage - DEPRECATED: Dùng discountRatesByPointOfSale thay thế
   isActive?: boolean;
   createdAt?: string;
   updatedAt?: string;
   // Enhanced fields
   assignedMerchants?: string[]; // Danh sách merchant ID được phép sử dụng
-  contactPhone?: string;
+  contactPhone?: string; // Số điện thoại liên hệ
+  paymentPhone?: string; // Số điện thoại thanh toán (từ ảnh VNPay) - dùng để auto-link agent
   contactEmail?: string;
   address?: string;
   taxCode?: string;
@@ -91,6 +92,8 @@ export interface Agent {
   notes?: string;
   // Point of sale assignment
   assignedPointOfSales?: string[]; // Danh sách điểm thu được gán (lưu pointOfSaleName hoặc pointOfSaleCode)
+  // Chiết khấu theo từng điểm bán (NEW WORKFLOW: Gán điểm bán trước, sau đó cấu hình chiết khấu)
+  discountRatesByPointOfSale?: Record<string, Record<string, number>>; // { pointOfSaleName: { paymentMethod: rate } }
 }
 
 // Represents a row from the Merchant's export file
@@ -105,6 +108,7 @@ export interface MerchantTransaction {
   pointOfSaleName?: string; // Điểm thu từ Excel
   pointOfSaleCode?: string; // Mã điểm thu từ Excel
   branchName?: string; // Chi nhánh từ Excel
+  sourceFile?: string; // Tên file Excel nguồn (cho tracking)
 }
 
 // Represents a bill submitted by the Agent
@@ -120,6 +124,8 @@ export interface AgentSubmission {
   ocrConfidence?: number; // Độ tin cậy của OCR (0-1)
   // Point of sale from OCR
   pointOfSaleName?: string; // Điểm thu từ OCR
+  // Payment phone from OCR - dùng để auto-link agent
+  paymentPhone?: string; // Số điện thoại thanh toán từ ảnh VNPay (ví dụ: "093451103")
 }
 
 export interface ReconciliationRecord {
@@ -132,6 +138,7 @@ export interface ReconciliationRecord {
   processedAt: string;
   // Enhanced fields for complete transaction records
   errorDetail?: string;
+  errorType?: 'WRONG_POINT_OF_SALE' | 'WRONG_AMOUNT' | 'WRONG_AGENT' | 'WRONG_TRANSACTION_CODE' | 'DUPLICATE' | 'MISSING_MERCHANT' | 'MISSING_AGENT'; // Loại lỗi chi tiết
   merchantCode?: string;
   merchantId?: string; // Merchant ID (not just code)
   agentId?: string;
@@ -149,6 +156,17 @@ export interface ReconciliationRecord {
   note?: string;
   noteUpdatedAt?: string;
   noteUpdatedBy?: string;
+  // Manual edit tracking
+  isManuallyEdited?: boolean; // Đã được sửa thủ công chưa
+  editedFields?: string[]; // Các field đã được sửa: ['transactionCode', 'amount', 'pointOfSaleName', 'agentId']
+  editHistory?: Array<{
+    field: string;
+    oldValue: any;
+    newValue: any;
+    editedAt: string;
+    editedBy: string;
+  }>;
+  sessionId?: string; // ID của session đối soát
 }
 
 export interface Stats {
@@ -179,6 +197,36 @@ export interface ReconciliationSession {
     byAgent: Record<string, { count: number; amount: number }>;
     byMerchant: Record<string, { count: number; amount: number }>;
   };
+  // Aggregated data for supplementary bills và export
+  aggregatedData?: {
+    byTransactionCode: Record<string, {
+      transactionCode: string;
+      pointOfSaleName?: string;
+      agentId?: string;
+      merchantAmount: number;
+      agentAmount: number;
+      status: TransactionStatus;
+      lastProcessedAt: string;
+      sessionIds: string[]; // Danh sách session đã xử lý bill này
+    }>;
+    byPointOfSale: Record<string, {
+      pointOfSaleName: string;
+      totalTransactions: number;
+      totalAmount: number;
+      matchedCount: number;
+      errorCount: number;
+    }>;
+    byAgent: Record<string, {
+      agentId: string;
+      totalTransactions: number;
+      totalAmount: number;
+      matchedCount: number;
+      errorCount: number;
+    }>;
+  };
+  // Supplementary bills tracking
+  isSupplementary?: boolean; // Có phải là session bổ sung không
+  parentSessionId?: string; // ID của session gốc nếu là session bổ sung
 }
 
 // Payment - thanh toán cho agent

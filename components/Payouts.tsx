@@ -6,6 +6,7 @@ import { useRealtimeData, FirebaseUtils } from '../src/lib/firebaseHooks';
 import { createStyledWorkbook, createStyledSheet, addMetadataSheet, exportWorkbook, identifyNumberColumns } from '../src/utils/excelExportUtils';
 import { update, ref } from 'firebase/database';
 import { database } from '../src/lib/firebase';
+import Pagination from './Pagination';
 
 const Payouts: React.FC = () => {
   // Firebase hooks for agents data
@@ -18,8 +19,14 @@ const Payouts: React.FC = () => {
   const [unpaidTransactions, setUnpaidTransactions] = useState<ReconciliationRecord[]>([]);
   const [selectedTransactions, setSelectedTransactions] = useState<string[]>([]);
   
-  // Payment Batches State
+  // Payment Batches State (lazy loading)
   const [paymentBatches, setPaymentBatches] = useState<PaymentBatch[]>([]);
+  const [batchesPage, setBatchesPage] = useState(1);
+  const batchesItemsPerPage = 5;
+  const [batchesHasMore, setBatchesHasMore] = useState(false);
+  const [batchesTotal, setBatchesTotal] = useState(0);
+  const [allLoadedBatches, setAllLoadedBatches] = useState<PaymentBatch[]>([]);
+  const [loadingBatches, setLoadingBatches] = useState(false);
   
   // UI State
   const [loading, setLoading] = useState(true);
@@ -50,7 +57,7 @@ const Payouts: React.FC = () => {
     
     // Load data asynchronously
     loadUnpaidTransactions();
-    loadPaymentBatches();
+    loadPaymentBatches(1, true);
   }, []);
 
   const loadUnpaidTransactions = async () => {
@@ -64,13 +71,41 @@ const Payouts: React.FC = () => {
     }
   };
 
-  const loadPaymentBatches = async () => {
+  const loadPaymentBatches = async (page: number = 1, reset: boolean = false) => {
     try {
-      const batches = await PaymentsService.getBatches();
-      setPaymentBatches(batches);
+      setLoadingBatches(true);
+      const { batches, hasMore, total } = await PaymentsService.getBatches(page, batchesItemsPerPage);
+      
+      if (reset) {
+        setAllLoadedBatches(batches);
+        setPaymentBatches(batches);
+      } else {
+        const updatedBatches = [...allLoadedBatches, ...batches];
+        setAllLoadedBatches(updatedBatches);
+        setPaymentBatches(updatedBatches);
+      }
+      
+      setBatchesHasMore(hasMore);
+      setBatchesTotal(total);
     } catch (error) {
       console.error('Error loading payment batches:', error);
       setPaymentBatches([]);
+    } finally {
+      setLoadingBatches(false);
+    }
+  };
+  
+  const handleBatchesPageChange = async (newPage: number) => {
+    setBatchesPage(newPage);
+    // Nếu trang mới chưa được load, load nó
+    const maxLoadedPage = Math.ceil(allLoadedBatches.length / batchesItemsPerPage);
+    if (newPage > maxLoadedPage && batchesHasMore) {
+      await loadPaymentBatches(newPage, false);
+    } else {
+      // Hiển thị dữ liệu đã load
+      const startIndex = (newPage - 1) * batchesItemsPerPage;
+      const endIndex = startIndex + batchesItemsPerPage;
+      setPaymentBatches(allLoadedBatches.slice(startIndex, endIndex));
     }
   };
 
@@ -244,7 +279,7 @@ const Payouts: React.FC = () => {
       
       // Reload data
       await loadUnpaidTransactions();
-      await loadPaymentBatches();
+      await loadPaymentBatches(1, true);
       
       alert('Tạo đợt chi trả thành công!');
     } catch (error) {
@@ -262,7 +297,7 @@ const Payouts: React.FC = () => {
       alert('Xóa đợt chi trả thành công!');
       // Reload data
       await loadUnpaidTransactions();
-      await loadPaymentBatches();
+      await loadPaymentBatches(1, true);
     } catch (error) {
       console.error('Error deleting batch:', error);
       alert('Có lỗi khi xóa đợt chi trả');
@@ -389,7 +424,7 @@ const Payouts: React.FC = () => {
             activeTab === 'batches' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-800'
           }`}
         >
-          Đợt chi trả ({paymentBatches.length})
+          Đợt chi trả ({batchesTotal > 0 ? batchesTotal : paymentBatches.length})
         </button>
       </div>
 
@@ -703,7 +738,9 @@ const Payouts: React.FC = () => {
         </div>
       ) : (
         <div className="space-y-4">
-          {paymentBatches.length === 0 ? (
+          {loadingBatches ? (
+            <div className="text-center py-8 text-slate-400">Đang tải đợt chi trả...</div>
+          ) : paymentBatches.length === 0 ? (
             <div className="text-center py-12 bg-white rounded-xl border border-slate-200">
               <Package className="w-12 h-12 mx-auto text-slate-300 mb-4" />
               <h3 className="text-lg font-medium text-slate-600">Chưa có đợt chi trả nào</h3>
@@ -758,6 +795,24 @@ const Payouts: React.FC = () => {
                 </div>
               </div>
             ))
+          )}
+          
+          {/* Pagination for batches (lazy loading) */}
+          {batchesTotal > batchesItemsPerPage && (
+            <div className="mt-4">
+              <Pagination
+                currentPage={batchesPage}
+                totalPages={Math.ceil(batchesTotal / batchesItemsPerPage)}
+                onPageChange={handleBatchesPageChange}
+                itemsPerPage={batchesItemsPerPage}
+                totalItems={batchesTotal}
+              />
+              {loadingBatches && (
+                <div className="text-center text-sm text-slate-500 mt-2">
+                  Đang tải thêm dữ liệu...
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}

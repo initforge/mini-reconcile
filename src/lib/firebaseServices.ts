@@ -322,7 +322,8 @@ export const ReconciliationService = {
   async updateSession(id: string, updates: Partial<ReconciliationSession>): Promise<void> {
     const updatedData = {
       ...updates,
-      processedAt: FirebaseUtils.getServerTimestamp()
+      updatedAt: FirebaseUtils.getServerTimestamp(),
+      processedAt: updates.processedAt || FirebaseUtils.getServerTimestamp()
     }
     await update(ref(database, `reconciliation_sessions/${id}`), updatedData)
   },
@@ -343,13 +344,25 @@ export const ReconciliationService = {
   },
 
   // Lấy lịch sử các phiên đối soát (lấy COMPLETED và PROCESSING, bỏ FAILED)
-  async getSessionHistory(limit?: number): Promise<ReconciliationSession[]> {
+  // Lazy loading: chỉ load số lượng cần thiết
+  async getSessionHistory(page: number = 1, pageSize: number = 5): Promise<{ sessions: ReconciliationSession[]; hasMore: boolean; total: number }> {
     const snapshot = await get(ref(database, 'reconciliation_sessions'))
     const sessions = FirebaseUtils.objectToArray(snapshot.val()) as ReconciliationSession[]
     // Lấy COMPLETED và PROCESSING, bỏ FAILED
     const validSessions = sessions.filter(s => s.status === 'COMPLETED' || s.status === 'PROCESSING')
     const sorted = validSessions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    return limit ? sorted.slice(0, limit) : sorted
+    
+    const total = sorted.length
+    const startIndex = (page - 1) * pageSize
+    const endIndex = startIndex + pageSize
+    const paginatedSessions = sorted.slice(startIndex, endIndex)
+    const hasMore = endIndex < total
+    
+    return {
+      sessions: paginatedSessions,
+      hasMore,
+      total
+    }
   },
 
   // Lấy records theo session ID
@@ -366,6 +379,15 @@ export const ReconciliationService = {
       note,
       noteUpdatedAt: FirebaseUtils.getServerTimestamp(),
       noteUpdatedBy: 'current_user' // TODO: Get from auth context
+    })
+  },
+
+  // Cập nhật toàn bộ reconciliation record (manual edit)
+  async updateRecord(recordId: string, updates: Partial<ReconciliationRecord>): Promise<void> {
+    const recordRef = ref(database, `reconciliation_records/${recordId}`)
+    await update(recordRef, {
+      ...updates,
+      updatedAt: FirebaseUtils.getServerTimestamp()
     })
   },
 
@@ -548,7 +570,17 @@ export const PaymentsService = {
       
       const amount = record.merchantAmount || 0
       const paymentMethod = record.paymentMethod || record.merchantData?.method || 'QR 1 (VNPay)'
-      const feePercentage = agent.discountRates?.[paymentMethod] || 0
+      const pointOfSaleName = record.pointOfSaleName
+      
+      // Ưu tiên dùng discountRatesByPointOfSale (NEW WORKFLOW)
+      let feePercentage = 0;
+      if (agent.discountRatesByPointOfSale && pointOfSaleName && agent.discountRatesByPointOfSale[pointOfSaleName]) {
+        feePercentage = agent.discountRatesByPointOfSale[pointOfSaleName][paymentMethod] || 0;
+      } else if (agent.discountRates) {
+        // Fallback về discountRates global (cũ)
+        feePercentage = agent.discountRates[paymentMethod] || 0;
+      }
+      
       const feeAmount = (amount * feePercentage) / 100
       const netAmount = amount - feeAmount
       
@@ -611,15 +643,27 @@ export const PaymentsService = {
     return newRef.key!
   },
 
-  // Lấy danh sách đợt chi trả
-  async getBatches(): Promise<PaymentBatch[]> {
+  // Lấy danh sách đợt chi trả (lazy loading)
+  async getBatches(page: number = 1, pageSize: number = 5): Promise<{ batches: PaymentBatch[]; hasMore: boolean; total: number }> {
     try {
       const snapshot = await get(ref(database, 'payment_batches'))
       const batches = FirebaseUtils.objectToArray(snapshot.val()) as PaymentBatch[]
-      return batches.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      const sorted = batches.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      
+      const total = sorted.length
+      const startIndex = (page - 1) * pageSize
+      const endIndex = startIndex + pageSize
+      const paginatedBatches = sorted.slice(startIndex, endIndex)
+      const hasMore = endIndex < total
+      
+      return {
+        batches: paginatedBatches,
+        hasMore,
+        total
+      }
     } catch (error) {
       console.error('Error loading payment batches:', error)
-      return []
+      return { batches: [], hasMore: false, total: 0 }
     }
   },
 
@@ -777,11 +821,18 @@ export const ReportsService = {
       const agentData = agentMap.get(agentId)
       const amount = record.merchantData?.amount || 0
       
-      // Calculate fee based on agent's discount rates for the payment method
+      // Calculate fee based on agent's discount rates by point of sale (NEW WORKFLOW)
       const paymentMethod = record.paymentMethod || record.merchantData?.method || 'QR 1 (VNPay)';
+      const pointOfSaleName = record.pointOfSaleName;
       const agent = agents.find((a: any) => (a.id === agentId || a.code === agentId));
-      const discountRate = agent?.discountRates?.[paymentMethod] || 0;
-      const fee = amount * (discountRate / 100);
+      
+      let feePercentage = 0;
+      if (agent?.discountRatesByPointOfSale && pointOfSaleName && agent.discountRatesByPointOfSale[pointOfSaleName]) {
+        feePercentage = agent.discountRatesByPointOfSale[pointOfSaleName][paymentMethod] || 0;
+      } else if (agent?.discountRates) {
+        feePercentage = agent.discountRates[paymentMethod] || 0;
+      }
+      const fee = amount * (feePercentage / 100);
       
       agentData.totalTransactions++
       agentData.totalAmount += amount

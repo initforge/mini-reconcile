@@ -45,7 +45,8 @@ const Agents: React.FC = () => {
     taxCode: '',
     bankBranch: '',
     qrCodeBase64: '',
-    notes: ''
+    notes: '',
+    discountRatesByPointOfSale: {} // Chiết khấu theo từng điểm bán
   };
 
   // Get all unique point of sales from merchants
@@ -120,15 +121,22 @@ const Agents: React.FC = () => {
       name: agent.name,
       code: agent.code,
       bankAccount: agent.bankAccount,
-      discountRates: agent.discountRates,
+      discountRates: agent.discountRates || {
+        "QR 1 (VNPay)": 0,
+        "QR 2 (App Bank)": 0,
+        "Sofpos": 0,
+        "POS": 0
+      },
       isActive: agent.isActive,
+      assignedPointOfSales: agent.assignedPointOfSales || [],
       contactPhone: agent.contactPhone || '',
       contactEmail: agent.contactEmail || '',
       address: agent.address || '',
       taxCode: agent.taxCode || '',
       bankBranch: agent.bankBranch || '',
       qrCodeBase64: agent.qrCodeBase64 || '',
-      notes: agent.notes || ''
+      notes: agent.notes || '',
+      discountRatesByPointOfSale: agent.discountRatesByPointOfSale || {}
     });
     setIsModalOpen(true);
   };
@@ -168,6 +176,7 @@ const Agents: React.FC = () => {
         // Edit existing agent
         await updateData(`/agents/${editingId}`, {
           ...formData,
+          discountRatesByPointOfSale: formData.discountRatesByPointOfSale || {},
           updatedAt: FirebaseUtils.getServerTimestamp()
         });
         alert('Đã cập nhật thông tin đại lý thành công!');
@@ -176,6 +185,7 @@ const Agents: React.FC = () => {
         const newId = FirebaseUtils.generateId();
         await writeData(`/agents/${newId}`, {
           ...formData,
+          discountRatesByPointOfSale: formData.discountRatesByPointOfSale || {},
           createdAt: FirebaseUtils.getServerTimestamp(),
           updatedAt: FirebaseUtils.getServerTimestamp(),
           isActive: true
@@ -307,20 +317,46 @@ const Agents: React.FC = () => {
                  </div>
                </div>
 
-               <div className="bg-slate-50 rounded-lg p-4">
-                 <div className="flex items-center mb-3">
-                   <Percent className="w-4 h-4 mr-2 text-slate-500" />
-                   <span className="text-sm font-semibold text-slate-700">Cấu hình phí / Chiết khấu</span>
+               {/* Discount Rates by Point of Sale */}
+               {agent.discountRatesByPointOfSale && Object.keys(agent.discountRatesByPointOfSale).length > 0 ? (
+                 <div className="bg-slate-50 rounded-lg p-4">
+                   <div className="flex items-center mb-3">
+                     <Percent className="w-4 h-4 mr-2 text-slate-500" />
+                     <span className="text-sm font-semibold text-slate-700">Chiết khấu theo Điểm thu</span>
+                   </div>
+                   <div className="space-y-3">
+                     {Object.entries(agent.discountRatesByPointOfSale).map(([pos, rates]) => (
+                       <div key={pos} className="bg-white rounded border border-slate-200 p-2">
+                         <div className="font-mono text-xs font-semibold text-indigo-700 mb-2">{pos}</div>
+                         <div className="grid grid-cols-2 gap-2">
+                           {Object.entries(rates).map(([method, rate]) => (
+                             <div key={method} className="flex justify-between items-center text-xs">
+                               <span className="text-slate-500 truncate max-w-[80px]" title={method}>{method}</span>
+                               <span className="font-bold text-indigo-600">{rate}%</span>
+                             </div>
+                           ))}
+                         </div>
+                       </div>
+                     ))}
+                   </div>
                  </div>
-                 <div className="grid grid-cols-2 gap-3">
-                   {Object.entries(agent.discountRates || {}).map(([method, rate]) => (
-                     <div key={method} className="flex justify-between items-center text-sm bg-white p-2 rounded border border-slate-100">
-                       <span className="text-slate-500 text-xs truncate max-w-[100px]" title={method}>{method}</span>
-                       <span className="font-bold text-indigo-600">{rate}%</span>
-                     </div>
-                   ))}
+               ) : (
+                 <div className="bg-slate-50 rounded-lg p-4">
+                   <div className="flex items-center mb-3">
+                     <Percent className="w-4 h-4 mr-2 text-slate-500" />
+                     <span className="text-sm font-semibold text-slate-700">Cấu hình phí / Chiết khấu (Cũ)</span>
+                   </div>
+                   <div className="grid grid-cols-2 gap-3">
+                     {Object.entries(agent.discountRates || {}).map(([method, rate]) => (
+                       <div key={method} className="flex justify-between items-center text-sm bg-white p-2 rounded border border-slate-100">
+                         <span className="text-slate-500 text-xs truncate max-w-[100px]" title={method}>{method}</span>
+                         <span className="font-bold text-indigo-600">{rate}%</span>
+                       </div>
+                     ))}
+                   </div>
+                   <p className="text-xs text-amber-600 mt-2">⚠️ Vui lòng cập nhật: Gán điểm thu và cấu hình chiết khấu theo từng điểm thu</p>
                  </div>
-               </div>
+               )}
 
                {/* Assigned Point of Sales */}
                {agent.assignedPointOfSales && agent.assignedPointOfSales.length > 0 && (
@@ -398,37 +434,20 @@ const Agents: React.FC = () => {
                   </div>
                 </div>
                 <div className="space-y-1">
-                    <label className="text-sm font-medium text-slate-700">Số tài khoản ngân hàng</label>
+                    <label className="text-sm font-medium text-slate-700">
+                      Số tài khoản ngân hàng <span className="text-red-500">*</span>
+                    </label>
                     <input
                       type="text"
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 font-mono"
-                      placeholder="Nhập số tài khoản nhận tiền..."
+                      placeholder="VD: 093451103 (số TK ngân hàng từ ảnh VNPay)"
                       value={formData.bankAccount}
                       onChange={e => setFormData({...formData, bankAccount: e.target.value})}
                     />
-                </div>
-              </div>
-
-              {/* Fees Config */}
-              <div className="space-y-4">
-                <h4 className="text-sm font-semibold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2">Cấu hình phí / Chiết khấu (%)</h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {["QR 1 (VNPay)", "QR 2 (App Bank)", "Sofpos", "POS"].map((method) => (
-                    <div key={method} className="space-y-1">
-                      <label className="text-sm font-medium text-slate-600">{method}</label>
-                      <div className="relative">
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          className="w-full px-3 py-2 pr-8 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
-                          value={formData.discountRates[method] || 0}
-                          onChange={e => handleRateChange(method, e.target.value)}
-                        />
-                        <span className="absolute right-3 top-2 text-slate-400 text-sm">%</span>
-                      </div>
-                    </div>
-                  ))}
+                    <p className="text-xs text-slate-500 mt-1">
+                      <strong>Lưu ý quan trọng:</strong> Số tài khoản ngân hàng này (hiển thị trên ảnh VNPay) sẽ được dùng để tự động link đại lý khi OCR ảnh bill. 
+                      Đây chính là số tài khoản ngân hàng, không phải số điện thoại liên hệ.
+                    </p>
                 </div>
               </div>
 
@@ -437,7 +456,7 @@ const Agents: React.FC = () => {
                 <h4 className="text-sm font-semibold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2">Thông tin liên hệ</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label className="text-sm font-medium text-slate-700">Số điện thoại</label>
+                    <label className="text-sm font-medium text-slate-700">Số điện thoại liên hệ</label>
                     <input
                       type="text"
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
@@ -527,13 +546,14 @@ const Agents: React.FC = () => {
                 </div>
               </div>
 
-              {/* Point of Sale Assignment */}
+              {/* Point of Sale Assignment - STEP 1: Gán điểm bán trước */}
               <div className="space-y-4">
-                <h4 className="text-sm font-semibold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2">
-                  Gán vào Điểm thu ({formData.assignedPointOfSales?.length || 0} điểm thu)
+                <h4 className="text-sm font-semibold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2 flex items-center">
+                  <Store className="w-4 h-4 mr-2" />
+                  Bước 1: Gán Điểm thu ({formData.assignedPointOfSales?.length || 0} điểm thu)
                 </h4>
-                <p className="text-xs text-slate-500">
-                  Chọn các điểm thu mà đại lý này được phép xử lý. Khi bill up lên khớp mã chuẩn chi, đại lý gán vào điểm thu đó sẽ được tính chiết khấu.
+                <p className="text-xs text-slate-500 bg-blue-50 p-2 rounded border border-blue-100">
+                  <strong>Workflow mới:</strong> Gán điểm thu trước, sau đó cấu hình chiết khấu cho từng điểm thu ở bước 2.
                 </p>
                 
                 {allPointOfSales.length > 0 ? (
@@ -547,10 +567,31 @@ const Agents: React.FC = () => {
                             checked={formData.assignedPointOfSales?.includes(pos) || false}
                             onChange={(e) => {
                               const current = formData.assignedPointOfSales || [];
+                              const discountRatesByPOS = formData.discountRatesByPointOfSale || {};
+                              
                               if (e.target.checked) {
-                                setFormData({...formData, assignedPointOfSales: [...current, pos]});
+                                // Khi check, khởi tạo discount rates cho điểm bán này nếu chưa có
+                                if (!discountRatesByPOS[pos]) {
+                                  discountRatesByPOS[pos] = {
+                                    "QR 1 (VNPay)": 0,
+                                    "QR 2 (App Bank)": 0,
+                                    "Sofpos": 0,
+                                    "POS": 0
+                                  };
+                                }
+                                setFormData({
+                                  ...formData, 
+                                  assignedPointOfSales: [...current, pos],
+                                  discountRatesByPointOfSale: discountRatesByPOS
+                                });
                               } else {
-                                setFormData({...formData, assignedPointOfSales: current.filter(p => p !== pos)});
+                                // Khi uncheck, xóa discount rates của điểm bán này
+                                delete discountRatesByPOS[pos];
+                                setFormData({
+                                  ...formData, 
+                                  assignedPointOfSales: current.filter(p => p !== pos),
+                                  discountRatesByPointOfSale: discountRatesByPOS
+                                });
                               }
                             }}
                           />
@@ -569,6 +610,62 @@ const Agents: React.FC = () => {
                   </div>
                 )}
               </div>
+
+              {/* Discount Rates by Point of Sale - STEP 2: Cấu hình chiết khấu cho từng điểm bán */}
+              {formData.assignedPointOfSales && formData.assignedPointOfSales.length > 0 && (
+                <div className="space-y-4">
+                  <h4 className="text-sm font-semibold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2 flex items-center">
+                    <Percent className="w-4 h-4 mr-2" />
+                    Bước 2: Cấu hình Chiết khấu theo Điểm thu
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    Cấu hình tỷ lệ chiết khấu cho từng điểm thu đã gán. Mỗi điểm thu có thể có chiết khấu khác nhau.
+                  </p>
+                  
+                  <div className="space-y-4">
+                    {formData.assignedPointOfSales.map((pos) => {
+                      const posDiscountRates = formData.discountRatesByPointOfSale?.[pos] || {
+                        "QR 1 (VNPay)": 0,
+                        "QR 2 (App Bank)": 0,
+                        "Sofpos": 0,
+                        "POS": 0
+                      };
+                      
+                      return (
+                        <div key={pos} className="border border-slate-200 rounded-lg p-4 bg-slate-50">
+                          <div className="font-mono text-sm font-semibold text-indigo-700 mb-3">{pos}</div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            {["QR 1 (VNPay)", "QR 2 (App Bank)", "Sofpos", "POS"].map((method) => (
+                              <div key={method} className="space-y-1">
+                                <label className="text-xs font-medium text-slate-600">{method}</label>
+                                <div className="relative">
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    max="100"
+                                    className="w-full px-3 py-2 pr-8 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+                                    value={posDiscountRates[method] || 0}
+                                    onChange={e => {
+                                      const newRates = { ...formData.discountRatesByPointOfSale };
+                                      if (!newRates[pos]) {
+                                        newRates[pos] = { ...posDiscountRates };
+                                      }
+                                      newRates[pos][method] = parseFloat(e.target.value) || 0;
+                                      setFormData({ ...formData, discountRatesByPointOfSale: newRates });
+                                    }}
+                                  />
+                                  <span className="absolute right-3 top-2 text-slate-400 text-xs">%</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               <div className="flex justify-end space-x-3 pt-4 border-t border-slate-100">
                 <button
