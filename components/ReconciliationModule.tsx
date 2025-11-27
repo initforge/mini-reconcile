@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Play, AlertTriangle, CheckCircle, XCircle, Download, Search, FileText, BrainCircuit, Trash2, FileSpreadsheet, History, Plus, X, RotateCcw, Image as ImageIcon, Loader2, Edit2, Filter, Save } from 'lucide-react';
+import { Upload, Play, AlertTriangle, CheckCircle, XCircle, Download, Search, FileText, BrainCircuit, Trash2, FileSpreadsheet, History, Plus, X, RotateCcw, Image as ImageIcon, Loader2, Edit2, Filter, Save, Eye } from 'lucide-react';
 import { remove } from 'firebase/database';
 import Pagination from './Pagination';
 import { ReconciliationRecord, TransactionStatus, PaymentMethod, MerchantTransaction, AgentSubmission, ReconciliationSession, Merchant, Agent, Payment } from '../types';
@@ -1594,6 +1594,12 @@ const ReconciliationModule: React.FC = () => {
           });
           
           console.log(`✅ Updated session ${sessionId}: ${actualMatched} matched, ${actualErrors} errors, ${results.length} total`);
+          
+          // Load session data để hiển thị aggregated data
+          const updatedSession = await ReconciliationService.getSessionById(sessionId);
+          if (updatedSession) {
+            setCurrentSessionData(updatedSession);
+          }
         } catch (e) {
           console.warn('⚠️ Không thể cập nhật session trên Firebase.', e);
         }
@@ -1601,8 +1607,20 @@ const ReconciliationModule: React.FC = () => {
 
       setRecords(results);
       
+      // Load session data để hiển thị aggregated data
+      if (sessionId) {
+        try {
+          const updatedSession = await ReconciliationService.getSessionById(sessionId);
+          if (updatedSession) {
+            setCurrentSessionData(updatedSession);
+          }
+        } catch (e) {
+          console.warn('⚠️ Không thể load session data:', e);
+        }
+      }
+      
       // Reload history để hiển thị session mới
-      await loadSessionHistory();
+      await loadSessionHistory(1, true);
       
       setIsLoading(false);
       setStep(3);
@@ -1704,6 +1722,10 @@ const ReconciliationModule: React.FC = () => {
     }
   };
 
+  // State để hiển thị aggregated data
+  const [showAggregatedData, setShowAggregatedData] = useState(false);
+  const [currentSessionData, setCurrentSessionData] = useState<ReconciliationSession | null>(null);
+
   // Load session cũ để xem lại
   const loadHistorySession = async (sessionId: string) => {
     try {
@@ -1713,6 +1735,7 @@ const ReconciliationModule: React.FC = () => {
       
       if (session && sessionRecords) {
         setCurrentSessionId(sessionId);
+        setCurrentSessionData(session);
         setRecords(sessionRecords);
         setStep(3);
         setShowHistory(false);
@@ -2234,6 +2257,51 @@ const ReconciliationModule: React.FC = () => {
              </div>
           </div>
 
+          {/* Error Type Breakdown - Hiển thị phân loại lỗi chi tiết */}
+          {records.filter(r => r.status !== TransactionStatus.MATCHED).length > 0 && (
+            <div className="bg-white rounded-xl p-6 shadow-sm border border-slate-100">
+              <h3 className="text-lg font-semibold text-slate-800 mb-4 flex items-center">
+                <AlertTriangle className="w-5 h-5 mr-2 text-amber-600" />
+                Phân loại lỗi chi tiết
+              </h3>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                <div className="text-center p-3 bg-red-50 rounded-lg border border-red-100">
+                  <p className="text-xs text-red-600 font-medium mb-1">Sai số tiền</p>
+                  <p className="text-xl font-bold text-red-700">
+                    {records.filter(r => r.errorType === 'WRONG_AMOUNT').length}
+                  </p>
+                </div>
+                <div className="text-center p-3 bg-purple-50 rounded-lg border border-purple-100">
+                  <p className="text-xs text-purple-600 font-medium mb-1">Sai điểm bán</p>
+                  <p className="text-xl font-bold text-purple-700">
+                    {records.filter(r => r.errorType === 'WRONG_POINT_OF_SALE').length}
+                  </p>
+                </div>
+                <div className="text-center p-3 bg-pink-50 rounded-lg border border-pink-100">
+                  <p className="text-xs text-pink-600 font-medium mb-1">Sai đại lý</p>
+                  <p className="text-xl font-bold text-pink-700">
+                    {records.filter(r => r.errorType === 'WRONG_AGENT').length}
+                  </p>
+                </div>
+                <div className="text-center p-3 bg-orange-50 rounded-lg border border-orange-100">
+                  <p className="text-xs text-orange-600 font-medium mb-1">Trùng lặp</p>
+                  <p className="text-xl font-bold text-orange-700">
+                    {records.filter(r => r.errorType === 'DUPLICATE').length}
+                  </p>
+                </div>
+                <div className="text-center p-3 bg-yellow-50 rounded-lg border border-yellow-100">
+                  <p className="text-xs text-yellow-600 font-medium mb-1">Không tìm thấy</p>
+                  <p className="text-xl font-bold text-yellow-700">
+                    {records.filter(r => r.errorType === 'MISSING_MERCHANT' || r.errorType === 'MISSING_AGENT' || (!r.errorType && (r.status === TransactionStatus.MISSING_IN_MERCHANT || r.status === TransactionStatus.MISSING_IN_AGENT))).length}
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-slate-500 mt-3 text-center">
+                💡 Click vào từng loại lỗi trong bộ lọc để xem chi tiết từng loại
+              </p>
+            </div>
+          )}
+
           {/* Action Bar */}
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-lg shadow-sm border border-slate-100">
             <div className="flex flex-wrap gap-2">
@@ -2284,6 +2352,97 @@ const ReconciliationModule: React.FC = () => {
               </button>
             </div>
           </div>
+
+          {/* Aggregated Data Summary - Hiển thị dữ liệu tổng hợp */}
+          {currentSessionData?.aggregatedData && (
+            <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-xl p-6 shadow-sm border border-indigo-100">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-indigo-800 flex items-center">
+                  <FileText className="w-5 h-5 mr-2" />
+                  Dữ liệu Tổng hợp (Aggregated Data)
+                </h3>
+                <button
+                  onClick={() => setShowAggregatedData(!showAggregatedData)}
+                  className="text-sm text-indigo-600 hover:text-indigo-800 flex items-center"
+                >
+                  {showAggregatedData ? 'Ẩn' : 'Xem chi tiết'}
+                  {showAggregatedData ? <X className="w-4 h-4 ml-1" /> : <Eye className="w-4 h-4 ml-1" />}
+                </button>
+              </div>
+              
+              <div className="grid grid-cols-3 gap-4 mb-4">
+                <div className="bg-white rounded-lg p-3 border border-indigo-200">
+                  <p className="text-xs text-slate-600 mb-1">Mã giao dịch</p>
+                  <p className="text-lg font-bold text-indigo-700">
+                    {Object.keys(currentSessionData.aggregatedData.byTransactionCode || {}).length}
+                  </p>
+                </div>
+                <div className="bg-white rounded-lg p-3 border border-indigo-200">
+                  <p className="text-xs text-slate-600 mb-1">Điểm thu</p>
+                  <p className="text-lg font-bold text-indigo-700">
+                    {Object.keys(currentSessionData.aggregatedData.byPointOfSale || {}).length}
+                  </p>
+                </div>
+                <div className="bg-white rounded-lg p-3 border border-indigo-200">
+                  <p className="text-xs text-slate-600 mb-1">Đại lý</p>
+                  <p className="text-lg font-bold text-indigo-700">
+                    {Object.keys(currentSessionData.aggregatedData.byAgent || {}).length}
+                  </p>
+                </div>
+              </div>
+              
+              {showAggregatedData && (
+                <div className="space-y-4 mt-4">
+                  {/* By Point of Sale */}
+                  {currentSessionData.aggregatedData.byPointOfSale && Object.keys(currentSessionData.aggregatedData.byPointOfSale).length > 0 && (
+                    <div className="bg-white rounded-lg p-4 border border-indigo-200">
+                      <h4 className="text-sm font-semibold text-slate-700 mb-3">Theo Điểm thu</h4>
+                      <div className="space-y-2 max-h-40 overflow-y-auto">
+                        {Object.entries(currentSessionData.aggregatedData.byPointOfSale).map(([pos, data]) => (
+                          <div key={pos} className="flex justify-between items-center text-sm border-b border-slate-100 pb-2">
+                            <span className="font-mono text-xs text-slate-600">{pos}</span>
+                            <div className="flex items-center space-x-3 text-xs">
+                              <span className="text-slate-500">{data.totalTransactions} GD</span>
+                              <span className="text-emerald-600 font-medium">{data.matchedCount} khớp</span>
+                              <span className="text-red-600 font-medium">{data.errorCount} lỗi</span>
+                              <span className="text-slate-700 font-semibold">{data.totalAmount.toLocaleString('vi-VN')}đ</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* By Agent */}
+                  {currentSessionData.aggregatedData.byAgent && Object.keys(currentSessionData.aggregatedData.byAgent).length > 0 && (
+                    <div className="bg-white rounded-lg p-4 border border-indigo-200">
+                      <h4 className="text-sm font-semibold text-slate-700 mb-3">Theo Đại lý</h4>
+                      <div className="space-y-2 max-h-40 overflow-y-auto">
+                        {Object.entries(currentSessionData.aggregatedData.byAgent).map(([agentId, data]) => {
+                          const agent = agents.find(a => a.id === agentId);
+                          return (
+                            <div key={agentId} className="flex justify-between items-center text-sm border-b border-slate-100 pb-2">
+                              <span className="text-slate-700 font-medium">{agent?.name || agentId}</span>
+                              <div className="flex items-center space-x-3 text-xs">
+                                <span className="text-slate-500">{data.totalTransactions} GD</span>
+                                <span className="text-emerald-600 font-medium">{data.matchedCount} khớp</span>
+                                <span className="text-red-600 font-medium">{data.errorCount} lỗi</span>
+                                <span className="text-slate-700 font-semibold">{data.totalAmount.toLocaleString('vi-VN')}đ</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  
+                  <p className="text-xs text-slate-500 mt-2">
+                    💡 Dữ liệu tổng hợp này được dùng để phát hiện bill bổ sung/quên và tăng tốc độ truy vấn báo cáo
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Filter Bar */}
           <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-100 flex flex-wrap items-center gap-4">
