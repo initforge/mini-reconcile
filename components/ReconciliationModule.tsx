@@ -1469,12 +1469,25 @@ const ReconciliationModule: React.FC = () => {
         }>
       };
       
+      console.log(`📊 Bắt đầu tính aggregatedData cho ${results.length} records`);
+      
       results.forEach(record => {
         const agentId = record.agentData?.agentId;
         const merchantCode = record.merchantData?.merchantCode;
         const amount = record.merchantData?.amount || 0;
         const transactionCode = record.transactionCode;
         const pointOfSaleName = record.pointOfSaleName;
+        
+        // Debug log cho record đầu tiên
+        if (results.indexOf(record) === 0) {
+          console.log('📝 Sample record:', {
+            transactionCode,
+            pointOfSaleName,
+            agentId,
+            amount,
+            status: record.status
+          });
+        }
         
         // Summary for optimized queries
         if (agentId) {
@@ -1562,6 +1575,15 @@ const ReconciliationModule: React.FC = () => {
         }
       });
       
+      console.log(`✅ Hoàn thành tính aggregatedData:`, {
+        byTransactionCode: Object.keys(aggregatedData.byTransactionCode).length,
+        byPointOfSale: Object.keys(aggregatedData.byPointOfSale).length,
+        byAgent: Object.keys(aggregatedData.byAgent).length,
+        sampleTransactionCodes: Object.keys(aggregatedData.byTransactionCode).slice(0, 3),
+        samplePointOfSales: Object.keys(aggregatedData.byPointOfSale).slice(0, 3),
+        sampleAgents: Object.keys(aggregatedData.byAgent).slice(0, 3)
+      });
+      
       // Get primary agentId from summary (agent with most transactions)
       const primaryAgentId = Object.entries(summary.byAgent)
         .sort((a, b) => b[1].count - a[1].count)[0]?.[0];
@@ -1598,33 +1620,67 @@ const ReconciliationModule: React.FC = () => {
             byAgent: Object.keys(aggregatedData.byAgent).length
           });
           
-          // Set currentSessionData ngay với aggregatedData vừa tính (không cần load lại)
+          // Set currentSessionData ngay với aggregatedData vừa tính (không đợi Firebase)
+          // Load session hiện tại để lấy các field khác, nhưng dùng aggregatedData vừa tính
           const currentSession = await ReconciliationService.getSessionById(sessionId);
           if (currentSession) {
-            // Đảm bảo aggregatedData được set
             setCurrentSessionData({
               ...currentSession,
-              aggregatedData: aggregatedData
+              aggregatedData: aggregatedData // Đảm bảo aggregatedData được set ngay
             });
+            console.log('✅ Set currentSessionData with aggregatedData:', {
+              hasAggregatedData: !!aggregatedData,
+              byTransactionCode: Object.keys(aggregatedData.byTransactionCode).length,
+              byPointOfSale: Object.keys(aggregatedData.byPointOfSale).length,
+              byAgent: Object.keys(aggregatedData.byAgent).length
+            });
+          } else {
+            // Nếu không load được session, vẫn set aggregatedData vào state hiện tại
+            setCurrentSessionData(prev => prev ? {
+              ...prev,
+              aggregatedData: aggregatedData
+            } : null);
           }
         } catch (e) {
           console.warn('⚠️ Không thể cập nhật session trên Firebase.', e);
+          // Vẫn set aggregatedData vào state ngay cả khi lỗi
+          if (currentSessionData) {
+            setCurrentSessionData({
+              ...currentSessionData,
+              aggregatedData: aggregatedData
+            });
+          }
+        }
+      } else {
+        // Nếu không có sessionId, vẫn set aggregatedData vào state để hiển thị
+        if (currentSessionData) {
+          setCurrentSessionData({
+            ...currentSessionData,
+            aggregatedData: aggregatedData
+          });
+          console.log('✅ Set aggregatedData vào currentSessionData (không có sessionId)');
+        } else {
+          // Nếu chưa có currentSessionData, tạo một session tạm để hiển thị
+          console.log('⚠️ Chưa có currentSessionData, tạo session tạm để hiển thị aggregatedData');
+          setCurrentSessionData({
+            id: 'temp',
+            createdAt: new Date().toISOString(),
+            status: 'COMPLETED',
+            aggregatedData: aggregatedData
+          } as ReconciliationSession);
         }
       }
 
       setRecords(results);
       
-      // Load session data để hiển thị aggregated data
-      if (sessionId) {
-        try {
-          const updatedSession = await ReconciliationService.getSessionById(sessionId);
-          if (updatedSession) {
-            setCurrentSessionData(updatedSession);
-          }
-        } catch (e) {
-          console.warn('⚠️ Không thể load session data:', e);
+      // Debug: Log để kiểm tra aggregatedData có được set không
+      console.log('🔍 Final check - aggregatedData đã được tính:', {
+        aggregatedDataCounts: {
+          byTransactionCode: Object.keys(aggregatedData.byTransactionCode).length,
+          byPointOfSale: Object.keys(aggregatedData.byPointOfSale).length,
+          byAgent: Object.keys(aggregatedData.byAgent).length
         }
-      }
+      });
       
       // Reload history để hiển thị session mới
       await loadSessionHistory(1, true);
