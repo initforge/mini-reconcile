@@ -1,223 +1,107 @@
-# 📊 GIẢI THÍCH: TỔNG HỢP DỮ LIỆU (Aggregated Data)
+# 📊 TỔNG HỢP DỮ LIỆU - CÁCH HOẠT ĐỘNG
 
 ## 🎯 MỤC ĐÍCH
 
-Tính năng "Tổng hợp dữ liệu" có 2 mục đích chính:
+Tính năng này giúp hệ thống:
 
-1. **Phát hiện Bill bổ sung/quên**: Khi đại lý up lại bill đã xử lý trước đó, hệ thống tự động phát hiện và báo lỗi "Trùng lặp"
-2. **Tăng tốc độ truy vấn báo cáo**: Thay vì phải load tất cả `reconciliation_records` (có thể hàng nghìn), chỉ cần đọc `aggregatedData` từ `reconciliation_sessions` (10-100x nhanh hơn)
-
----
-
-## 🔄 QUY TRÌNH HOẠT ĐỘNG
-
-### **Bước 1: Tính toán khi đối soát**
-
-Khi đối soát xong, hệ thống tự động tính toán và lưu 3 loại dữ liệu tổng hợp:
-
-#### **1.1. Theo Mã giao dịch (`byTransactionCode`)**
-```typescript
-{
-  "20407295176354816": {
-    transactionCode: "20407295176354816",
-    pointOfSaleName: "ANCATTUONG66PKV01",
-    agentId: "agent_001",
-    merchantAmount: 18963000,
-    agentAmount: 18963000,
-    status: "MATCHED",
-    lastProcessedAt: "2025-11-27T10:30:00.000Z",
-    sessionIds: ["session_001", "session_002"] // Nếu bill được xử lý nhiều lần
-  }
-}
-```
-
-**Mục đích**: 
-- Track từng mã giao dịch đã được xử lý ở session nào
-- Phát hiện bill bổ sung (nếu `sessionId` khác với session hiện tại)
-
-#### **1.2. Theo Điểm thu (`byPointOfSale`)**
-```typescript
-{
-  "ANCATTUONG66PKV01": {
-    pointOfSaleName: "ANCATTUONG66PKV01",
-    totalTransactions: 15,
-    totalAmount: 250000000,
-    matchedCount: 12,
-    errorCount: 3
-  }
-}
-```
-
-**Mục đích**: 
-- Thống kê nhanh theo từng điểm thu
-- Dùng cho báo cáo Dashboard/Reports
-
-#### **1.3. Theo Đại lý (`byAgent`)**
-```typescript
-{
-  "agent_001": {
-    agentId: "agent_001",
-    totalTransactions: 25,
-    totalAmount: 500000000,
-    matchedCount: 20,
-    errorCount: 5
-  }
-}
-```
-
-**Mục đích**: 
-- Thống kê nhanh theo từng đại lý
-- Dùng cho báo cáo nợ theo đại lý
+1. **Tự động phát hiện bill bổ sung/quên**: Khi đại lý up lại bill đã xử lý trước đó, hệ thống tự động nhận biết và báo lỗi
+2. **Tăng tốc độ báo cáo**: Thay vì phải đọc tất cả dữ liệu chi tiết (có thể rất nhiều), hệ thống chỉ cần đọc phần tóm tắt → nhanh hơn rất nhiều
 
 ---
 
-### **Bước 2: Lưu vào Firebase**
+## 🔄 CÁCH HOẠT ĐỘNG
 
-Sau khi tính toán xong, dữ liệu được lưu vào `reconciliation_sessions`:
+### **Bước 1: Khi đối soát xong**
 
-```typescript
-{
-  id: "session_001",
-  status: "COMPLETED",
-  createdAt: "2025-11-27T10:30:00.000Z",
-  summary: { ... }, // Tổng hợp đơn giản
-  aggregatedData: {  // Dữ liệu tổng hợp chi tiết
-    byTransactionCode: { ... },
-    byPointOfSale: { ... },
-    byAgent: { ... }
-  }
-}
-```
+Sau mỗi lần đối soát, hệ thống tự động **tổng hợp** và **lưu lại** 3 loại thông tin:
 
----
+#### **1. Theo Mã giao dịch**
+- Hệ thống ghi nhớ: Mã giao dịch này đã được xử lý ở phiên đối soát nào
+- Ví dụ: Mã `20407295176354816` đã được xử lý ở phiên A
 
-### **Bước 3: Sử dụng khi đối soát lần sau**
+#### **2. Theo Điểm thu**
+- Hệ thống tính tổng: Điểm thu này có bao nhiêu giao dịch, tổng tiền bao nhiêu, bao nhiêu khớp, bao nhiêu lỗi
+- Ví dụ: Điểm thu "ANCATTUONG66PKV01" có 15 giao dịch, tổng 250 triệu, 12 khớp, 3 lỗi
 
-Khi đối soát lần 2, hệ thống:
-
-1. **Load tất cả `aggregatedData` từ các session trước**:
-   ```typescript
-   // Load từ tất cả sessions
-   allSessions.forEach(session => {
-     if (session.aggregatedData?.byTransactionCode) {
-       Object.entries(session.aggregatedData.byTransactionCode).forEach(([txCode, txData]) => {
-         existingTransactionCodes.set(txCode, {
-           sessionId: session.id,
-           processedAt: txData.lastProcessedAt
-         });
-       });
-     }
-   });
-   ```
-
-2. **Check khi đối soát**:
-   ```typescript
-   // Khi xử lý từng bill
-   const existingTx = existingTransactionCodes.get(transactionCode);
-   const isSupplementaryDuplicate = existingTx && existingTx.sessionId !== currentSessionId;
-   
-   if (isSupplementaryDuplicate) {
-     // Báo lỗi: "Bill đã được xử lý trong session trước"
-     status = TransactionStatus.ERROR_DUPLICATE;
-     errorType = 'DUPLICATE';
-   }
-   ```
+#### **3. Theo Đại lý**
+- Hệ thống tính tổng: Đại lý này có bao nhiêu giao dịch, tổng tiền bao nhiêu, bao nhiêu khớp, bao nhiêu lỗi
+- Ví dụ: Đại lý A có 25 giao dịch, tổng 500 triệu, 20 khớp, 5 lỗi
 
 ---
 
-### **Bước 4: Hiển thị trên UI**
+### **Bước 2: Lưu vào hệ thống**
 
-Card "Dữ liệu Tổng hợp" hiển thị:
+Tất cả thông tin tổng hợp này được **lưu lại** cùng với phiên đối soát, để dùng cho các lần sau.
 
-1. **3 số liệu tổng quan**:
-   - Mã giao dịch: Tổng số mã đã xử lý
-   - Điểm thu: Tổng số điểm thu
-   - Đại lý: Tổng số đại lý
+---
 
-2. **Chi tiết (khi click "Xem chi tiết")**:
-   - **Theo Điểm thu**: Danh sách điểm thu với số GD, khớp, lỗi, tổng tiền
-   - **Theo Đại lý**: Danh sách đại lý với số GD, khớp, lỗi, tổng tiền
+### **Bước 3: Khi đối soát lần sau**
+
+Khi đối soát lần 2, hệ thống sẽ:
+
+1. **Đọc lại** tất cả thông tin tổng hợp từ các phiên đối soát trước
+2. **Kiểm tra** từng bill mới:
+   - Nếu mã giao dịch đã có trong phiên trước → Báo lỗi: **"Bill đã được xử lý trong phiên trước"**
+   - Nếu chưa có → Xử lý bình thường
+
+---
+
+### **Bước 4: Hiển thị trên màn hình**
+
+Sau khi đối soát xong, bạn sẽ thấy:
+
+1. **Card "Dữ liệu Tổng hợp"** với 3 số liệu:
+   - Tổng số mã giao dịch đã xử lý
+   - Tổng số điểm thu
+   - Tổng số đại lý
+
+2. **Khi click "Xem chi tiết"**:
+   - Danh sách điểm thu: Mỗi điểm thu có bao nhiêu giao dịch, khớp, lỗi, tổng tiền
+   - Danh sách đại lý: Mỗi đại lý có bao nhiêu giao dịch, khớp, lỗi, tổng tiền
 
 ---
 
 ## 💡 VÍ DỤ THỰC TẾ
 
-### **Scenario 1: Phát hiện Bill bổ sung**
+### **Ví dụ 1: Phát hiện Bill bổ sung**
 
-**Lần 1 (Session A)**:
+**Lần 1 (Phiên A)**:
 - Đại lý up bill mã `20407295176354816` → Khớp ✅
-- Hệ thống lưu vào `aggregatedData.byTransactionCode["20407295176354816"]` với `sessionIds: ["session_A"]`
+- Hệ thống ghi nhớ: Mã này đã xử lý ở Phiên A
 
-**Lần 2 (Session B)**:
+**Lần 2 (Phiên B)**:
 - Đại lý up lại bill mã `20407295176354816` (quên đã up rồi)
-- Hệ thống check `existingTransactionCodes.get("20407295176354816")` → Tìm thấy `sessionId: "session_A"` (khác với `session_B`)
-- → Báo lỗi: **"⚠️ Bill 20407295176354816 đã được xử lý trong session trước (session_A). Đây là bill bổ sung/quên."**
-- Badge: **"Trùng lặp"** (màu cam)
+- Hệ thống kiểm tra → Tìm thấy mã này đã xử lý ở Phiên A (khác Phiên B)
+- → Báo lỗi: **"⚠️ Bill 20407295176354816 đã được xử lý trong phiên trước (Phiên A). Đây là bill bổ sung/quên."**
+- Badge hiển thị: **"Trùng lặp"** (màu cam)
 
-### **Scenario 2: Tăng tốc báo cáo**
+### **Ví dụ 2: Tăng tốc báo cáo**
 
-**Trước (không có aggregatedData)**:
-```typescript
-// Phải load TẤT CẢ records (có thể hàng nghìn)
-const allRecords = await getAllReconciliationRecords(); // 5-10 giây
-const stats = calculateStats(allRecords); // Tính toán lại từ đầu
-```
+**Trước (không có tổng hợp)**:
+- Hệ thống phải đọc TẤT CẢ các giao dịch chi tiết (có thể hàng nghìn) → Mất 5-10 giây
+- Sau đó tính toán lại từ đầu
 
-**Sau (có aggregatedData)**:
-```typescript
-// Chỉ load sessions và đọc aggregatedData
-const sessions = await getSessions(); // 0.5-1 giây
-const stats = sessions.reduce((sum, s) => {
-  return {
-    totalVolume: sum.totalVolume + s.summary.totalAmount,
-    totalTransactions: sum.totalTransactions + s.summary.totalRecords,
-    // ...
-  };
-}, {});
-// → 10-100x nhanh hơn!
-```
-
----
-
-## 🔍 CẤU TRÚC DỮ LIỆU CHI TIẾT
-
-### **byTransactionCode**
-- **Key**: `transactionCode` (mã chuẩn chi)
-- **Value**: Thông tin chi tiết của giao dịch đó
-- **Dùng để**: Phát hiện duplicate cross-session
-
-### **byPointOfSale**
-- **Key**: `pointOfSaleName` (tên điểm thu)
-- **Value**: Thống kê tổng hợp theo điểm thu
-- **Dùng để**: Báo cáo theo điểm thu
-
-### **byAgent**
-- **Key**: `agentId` (ID đại lý)
-- **Value**: Thống kê tổng hợp theo đại lý
-- **Dùng để**: Báo cáo nợ theo đại lý
+**Sau (có tổng hợp)**:
+- Hệ thống chỉ cần đọc phần tóm tắt từ các phiên đối soát → Mất 0.5-1 giây
+- → **Nhanh hơn 10-100 lần!**
 
 ---
 
 ## ⚡ LỢI ÍCH
 
-1. **Phát hiện Bill bổ sung tự động**: Không cần check thủ công
-2. **Tăng tốc báo cáo**: 10-100x nhanh hơn (không cần load tất cả records)
-3. **Tiết kiệm tài nguyên**: Chỉ lưu summary, không lưu toàn bộ dữ liệu chi tiết
-4. **Dễ mở rộng**: Có thể thêm thống kê mới vào `aggregatedData` mà không ảnh hưởng performance
+1. **Tự động phát hiện bill bổ sung**: Không cần kiểm tra thủ công, hệ thống tự động báo
+2. **Báo cáo nhanh hơn**: 10-100 lần nhanh hơn so với trước
+3. **Tiết kiệm tài nguyên**: Chỉ lưu phần tóm tắt, không lưu toàn bộ chi tiết
+4. **Dễ mở rộng**: Có thể thêm thống kê mới mà không làm chậm hệ thống
 
 ---
 
-## 📍 VỊ TRÍ TRONG CODE
+## 📍 TÓM TẮT
 
-- **Tính toán**: `components/ReconciliationModule.tsx:1445-1563`
-- **Lưu vào Firebase**: `components/ReconciliationModule.tsx:1591`
-- **Sử dụng để phát hiện duplicate**: `components/ReconciliationModule.tsx:1070-1081, 1121-1166`
-- **Hiển thị UI**: `components/ReconciliationModule.tsx:2392-2477`
+**"Tổng hợp dữ liệu"** là cách hệ thống **ghi nhớ** và **tóm tắt** kết quả đối soát, giúp:
 
----
+- ✅ Tự động phát hiện khi đại lý up lại bill đã xử lý
+- ✅ Báo cáo nhanh hơn rất nhiều
+- ✅ Giảm tải cho hệ thống
 
-**Tóm lại**: "Tổng hợp dữ liệu" là một cơ chế tối ưu để:
-- ✅ Phát hiện bill bổ sung/quên tự động
-- ✅ Tăng tốc độ truy vấn báo cáo
-- ✅ Giảm tải cho database
-
+**Đơn giản**: Giống như bạn ghi sổ tay tóm tắt những gì đã làm, để lần sau tra cứu nhanh hơn thay vì phải đọc lại toàn bộ chi tiết.

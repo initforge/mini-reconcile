@@ -8,7 +8,7 @@
 ## 🎯 1. TỰ ĐỘNG LINK ĐẠI LÝ BẰNG SỐ TÀI KHOẢN NGÂN HÀNG
 
 ### 📍 Sẽ thấy ở đâu:
-- **Quản lý Đại lý** → Form thêm/sửa đại lý → Field "Số tài khoản ngân hàng"
+- **Quản lý Đại lý** → Form thêm/sửa đại lý → Field **"Số tài khoản ngân hàng"**
 
 ### 🔍 Làm gì sẽ thấy:
 1. Nhập số tài khoản ngân hàng vào form đại lý
@@ -25,7 +25,7 @@ Số tài khoản ngân hàng = số hiển thị trên ảnh VNPay (có thể t
 ## 💰 2. CHIẾT KHẤU THEO TỪNG ĐIỂM THU
 
 ### 📍 Sẽ thấy ở đâu:
-- **Quản lý Đại lý** → Form thêm/sửa → Phần "Bước 1: Gán Điểm thu" và "Bước 2: Cấu hình Chiết khấu"
+- **Quản lý Đại lý** → Form thêm/sửa → Phần **"Bước 1: Gán Điểm thu"** và **"Bước 2: Cấu hình Chiết khấu"**
 
 ### 🔍 Làm gì sẽ thấy:
 1. **Bước 1**: Chọn các điểm thu (checkbox)
@@ -39,7 +39,7 @@ Số tài khoản ngân hàng = số hiển thị trên ảnh VNPay (có thể t
 ## ✏️ 3. SỬA THỦ CÔNG GIAO DỊCH
 
 ### 📍 Sẽ thấy ở đâu:
-- **Đối soát** → Bước 3: Kết quả → Bảng kết quả → Cột "Thao tác" → Nút **Sửa**
+- **Đối soát** → Bước 3: Kết quả → Bảng kết quả → Cột **"Thao tác"** → Nút **Sửa**
 
 ### 🔍 Làm gì sẽ thấy:
 1. Click nút **Sửa** ở dòng giao dịch cần sửa
@@ -53,10 +53,10 @@ Số tài khoản ngân hàng = số hiển thị trên ảnh VNPay (có thể t
 ## 🏪 4. GÁN ĐIỂM BÁN KHI OCR KHÔNG TÌM THẤY
 
 ### 📍 Sẽ thấy ở đâu:
-- **Đối soát** → Bước 3: Kết quả → Bảng kết quả → Cột "Điểm thu" → Dropdown
+- **Đối soát** → Bước 3: Kết quả → Bảng kết quả → Cột **"Điểm thu"** → Dropdown
 
 ### 🔍 Làm gì sẽ thấy:
-1. Nếu OCR không đọc được điểm bán → Cột "Điểm thu" hiển thị "Chưa có điểm bán"
+1. Nếu OCR không đọc được điểm bán → Cột "Điểm thu" hiển thị **"Chưa có điểm bán"**
 2. Click dropdown → Chọn điểm bán từ danh sách
 3. Hệ thống tự động cập nhật
 
@@ -67,9 +67,9 @@ Số tài khoản ngân hàng = số hiển thị trên ảnh VNPay (có thể t
 ## 🚨 5. BÁO LỖI CHI TIẾT VÀ PHÂN LOẠI
 
 ### 📍 Sẽ thấy ở đâu:
-- **Đối soát** → Bước 3: Kết quả → Card "Phân loại lỗi chi tiết" (ngay dưới Summary Banner)
-- Bảng kết quả → Cột "Trạng thái" → Badge màu
-- Filter Bar → Dropdown "Tất cả lỗi" → Chọn loại lỗi
+- **Đối soát** → Bước 3: Kết quả → Card **"Phân loại lỗi chi tiết"** (ngay dưới Summary Banner)
+- Bảng kết quả → Cột **"Trạng thái"** → Badge màu
+- Filter Bar → Dropdown **"Tất cả lỗi"** → Chọn loại lỗi
 
 ### 🔍 Làm gì sẽ thấy:
 1. Sau khi đối soát xong → Thấy card với 5 loại lỗi:
@@ -79,7 +79,7 @@ Số tài khoản ngân hàng = số hiển thị trên ảnh VNPay (có thể t
    - 🟠 **Trùng lặp** (cam)
    - ⚠️ **Không tìm thấy** (vàng)
 2. Trong bảng: Mỗi bill lỗi có badge màu tương ứng
-3. Filter: Click "Lỗi" → Chọn loại lỗi → Chỉ thấy bill loại đó
+3. Filter: Click **"Lỗi"** → Chọn loại lỗi → Chỉ thấy bill loại đó
 
 ---
 
@@ -88,7 +88,7 @@ Số tài khoản ngân hàng = số hiển thị trên ảnh VNPay (có thể t
 ## 🔍 6. LỌC VÀ XUẤT BILL LỖI
 
 ### 📍 Sẽ thấy ở đâu:
-- **Đối soát** → Bước 3: Kết quả → Filter Bar → Nút "Lỗi" + Dropdown loại lỗi
+- **Đối soát** → Bước 3: Kết quả → Filter Bar → Nút **"Lỗi"** + Dropdown loại lỗi
 - Action Bar → Nút **"Xuất Bill lỗi"** (màu vàng)
 
 ### 🔍 Làm gì sẽ thấy:
@@ -107,9 +107,9 @@ Số tài khoản ngân hàng = số hiển thị trên ảnh VNPay (có thể t
 
 ### 🔍 Làm gì sẽ thấy:
 1. Sau khi đối soát xong → Thấy card với 3 số liệu:
-   - Mã giao dịch: X
-   - Điểm thu: Y
-   - Đại lý: Z
+   - **Mã giao dịch**: X
+   - **Điểm thu**: Y
+   - **Đại lý**: Z
 2. Click **"Xem chi tiết"** → Mở rộng hiển thị:
    - **Theo Điểm thu**: Danh sách điểm thu với số GD, khớp, lỗi, tổng tiền
    - **Theo Đại lý**: Danh sách đại lý với số GD, khớp, lỗi, tổng tiền
