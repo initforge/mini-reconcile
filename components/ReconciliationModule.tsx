@@ -127,10 +127,13 @@ const ReconciliationModule: React.FC = () => {
         setAllLoadedHistory(historyWithRealStats);
         setSessionHistory(historyWithRealStats);
       } else {
-        // Append: thêm vào danh sách đã load
+        // Append: thêm vào danh sách đã load, nhưng chỉ hiển thị trang hiện tại
         const updatedHistory = [...allLoadedHistory, ...historyWithRealStats];
         setAllLoadedHistory(updatedHistory);
-        setSessionHistory(updatedHistory);
+        // Chỉ hiển thị trang hiện tại (page)
+        const startIndex = (page - 1) * historyItemsPerPage;
+        const endIndex = startIndex + historyItemsPerPage;
+        setSessionHistory(updatedHistory.slice(startIndex, endIndex));
       }
       
       setHistoryHasMore(hasMore);

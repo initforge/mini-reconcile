@@ -80,9 +80,13 @@ const Payouts: React.FC = () => {
         setAllLoadedBatches(batches);
         setPaymentBatches(batches);
       } else {
+        // Append: thêm vào danh sách đã load, nhưng chỉ hiển thị trang hiện tại
         const updatedBatches = [...allLoadedBatches, ...batches];
         setAllLoadedBatches(updatedBatches);
-        setPaymentBatches(updatedBatches);
+        // Chỉ hiển thị trang hiện tại (page)
+        const startIndex = (page - 1) * batchesItemsPerPage;
+        const endIndex = startIndex + batchesItemsPerPage;
+        setPaymentBatches(updatedBatches.slice(startIndex, endIndex));
       }
       
       setBatchesHasMore(hasMore);
@@ -385,8 +389,8 @@ const Payouts: React.FC = () => {
           <div className="h-5 w-28 bg-slate-200 rounded"></div>
         </div>
       </div>
-    </div>
-  );
+      </div>
+    );
 
   return (
     <div className="space-y-6">
@@ -431,16 +435,16 @@ const Payouts: React.FC = () => {
       {/* Search and Filters */}
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1 max-w-md">
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <Search className="h-5 w-5 text-slate-400" />
-          </div>
-          <input
-            type="text"
-            className="block w-full pl-10 pr-3 py-2 border border-slate-200 rounded-lg leading-5 bg-slate-50 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm transition-colors"
-            placeholder="Tìm kiếm đại lý..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
+        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+          <Search className="h-5 w-5 text-slate-400" />
+        </div>
+        <input
+          type="text"
+          className="block w-full pl-10 pr-3 py-2 border border-slate-200 rounded-lg leading-5 bg-slate-50 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm transition-colors"
+          placeholder="Tìm kiếm đại lý..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+        />
         </div>
         
         {/* Point of Sale Filter */}
@@ -512,23 +516,23 @@ const Payouts: React.FC = () => {
                       return (
                         <tr key={agentId} className="hover:bg-slate-50">
                           <td className="p-4">
-                            <input
-                              type="checkbox"
-                              checked={group.transactions.every((tx) => selectedTransactions.includes(tx.id))}
-                              onChange={(e) => {
-                                if (e.target.checked) {
-                                  setSelectedTransactions(prev => [
-                                    ...prev,
-                                    ...group.transactions.map((tx) => tx.id).filter((id: string) => !prev.includes(id))
-                                  ]);
-                                } else {
-                                  setSelectedTransactions(prev => 
-                                    prev.filter(id => !group.transactions.some((tx) => tx.id === id))
-                                  );
-                                }
-                              }}
-                              className="w-4 h-4 text-indigo-600 bg-slate-100 border-slate-300 rounded focus:ring-indigo-500"
-                            />
+                    <input
+                      type="checkbox"
+                      checked={group.transactions.every((tx) => selectedTransactions.includes(tx.id))}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedTransactions(prev => [
+                            ...prev,
+                            ...group.transactions.map((tx) => tx.id).filter((id: string) => !prev.includes(id))
+                          ]);
+                        } else {
+                          setSelectedTransactions(prev => 
+                            prev.filter(id => !group.transactions.some((tx) => tx.id === id))
+                          );
+                        }
+                      }}
+                      className="w-4 h-4 text-indigo-600 bg-slate-100 border-slate-300 rounded focus:ring-indigo-500"
+                    />
                           </td>
                           <td className="p-4">
                             <div className="font-medium text-slate-800">{agent?.name || agentId}</div>
@@ -544,7 +548,7 @@ const Payouts: React.FC = () => {
                               {pointOfSales.length > 2 && (
                                 <span className="text-xs text-slate-400">+{pointOfSales.length - 2}</span>
                               )}
-                            </div>
+                    </div>
                           </td>
                           <td className="p-4 text-slate-700">{group.transactions.length}</td>
                           <td className="p-4 text-right font-medium text-slate-800">{group.totalAmount.toLocaleString('vi-VN')} đ</td>
@@ -564,8 +568,8 @@ const Payouts: React.FC = () => {
                     })}
                   </tbody>
                 </table>
-              </div>
-              
+                  </div>
+                  
               {/* Popup chi tiết */}
               {selectedGroup && (() => {
                 const [agentId, group] = filteredGroups.find(([id]) => id === selectedGroup) || [null, null];
@@ -584,68 +588,68 @@ const Payouts: React.FC = () => {
                         >
                           <X className="w-5 h-5 text-slate-500" />
                         </button>
-                      </div>
-                      
+                </div>
+                
                       <div className="p-6 space-y-6">
                         {/* Summary Cards */}
                         <div className="grid grid-cols-3 gap-4">
                           <div className="bg-slate-50 rounded-lg p-4">
                             <div className="text-sm text-slate-500 mb-1">Tổng giao dịch</div>
                             <div className="text-xl font-bold text-slate-800">{group.totalAmount.toLocaleString('vi-VN')} đ</div>
-                          </div>
+                  </div>
                           <div className="bg-red-50 rounded-lg p-4">
                             <div className="text-sm text-slate-500 mb-1">Phí chiết khấu</div>
                             <div className="text-xl font-bold text-red-600">-{group.feeAmount.toLocaleString('vi-VN')} đ</div>
-                          </div>
+                  </div>
                           <div className="bg-emerald-50 rounded-lg p-4">
                             <div className="text-sm text-slate-500 mb-1">Thực nhận</div>
                             <div className="text-xl font-bold text-emerald-700">{group.netAmount.toLocaleString('vi-VN')} đ</div>
-                          </div>
-                        </div>
-                        
+                  </div>
+                </div>
+
                         {/* Agent Bank Info */}
-                        {(() => {
-                          const agent = agents.find(a => a.id === agentId || a.code === agentId);
-                          return agent ? (
-                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                              <h4 className="text-sm font-semibold text-blue-800 mb-3 flex items-center">
-                                <CreditCard className="w-4 h-4 mr-2" />
-                                Thông tin chuyển khoản
-                              </h4>
+                {(() => {
+                  const agent = agents.find(a => a.id === agentId || a.code === agentId);
+                  return agent ? (
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                      <h4 className="text-sm font-semibold text-blue-800 mb-3 flex items-center">
+                        <CreditCard className="w-4 h-4 mr-2" />
+                        Thông tin chuyển khoản
+                      </h4>
                               <div className="space-y-4">
                                 <div className="grid grid-cols-2 gap-4">
-                                  <div>
-                                    <label className="text-xs text-blue-600 font-medium">Số tài khoản</label>
-                                    <div className="flex items-center space-x-2 mt-1">
-                                      <span className="font-mono text-sm font-bold text-blue-900 bg-white px-3 py-1 rounded border">
-                                        {agent.bankAccount || 'Chưa cập nhật'}
-                                      </span>
-                                      {agent.bankAccount && (
-                                        <button
-                                          onClick={() => copyToClipboard(agent.bankAccount, `STK-${agentId}`)}
-                                          className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-100 rounded"
-                                        >
-                                          <Copy className="w-4 h-4" />
-                                        </button>
-                                      )}
+                          <div>
+                            <label className="text-xs text-blue-600 font-medium">Số tài khoản</label>
+                            <div className="flex items-center space-x-2 mt-1">
+                              <span className="font-mono text-sm font-bold text-blue-900 bg-white px-3 py-1 rounded border">
+                                {agent.bankAccount || 'Chưa cập nhật'}
+                              </span>
+                              {agent.bankAccount && (
+                                <button
+                                  onClick={() => copyToClipboard(agent.bankAccount, `STK-${agentId}`)}
+                                  className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-100 rounded"
+                                >
+                                  <Copy className="w-4 h-4" />
+                                </button>
+                                )}
+                              </div>
+                            </div>
+                          <div>
+                            <label className="text-xs text-blue-600 font-medium">Tên người nhận</label>
+                            <div className="flex items-center space-x-2 mt-1">
+                              <span className="text-sm font-medium text-blue-900 bg-white px-3 py-1 rounded border">
+                                {agent.name}
+                              </span>
+                              <button
+                                onClick={() => copyToClipboard(agent.name, `Name-${agentId}`)}
+                                className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-100 rounded"
+                              >
+                                <Copy className="w-4 h-4" />
+                              </button>
                                     </div>
-                                  </div>
-                                  <div>
-                                    <label className="text-xs text-blue-600 font-medium">Tên người nhận</label>
-                                    <div className="flex items-center space-x-2 mt-1">
-                                      <span className="text-sm font-medium text-blue-900 bg-white px-3 py-1 rounded border">
-                                        {agent.name}
-                                      </span>
-                                      <button
-                                        onClick={() => copyToClipboard(agent.name, `Name-${agentId}`)}
-                                        className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-100 rounded"
-                                      >
-                                        <Copy className="w-4 h-4" />
-                                      </button>
-                                    </div>
-                                  </div>
-                                </div>
-                                
+                            </div>
+                          </div>
+                          
                                 {/* QR Code Display */}
                                 {agent.qrCodeBase64 && (
                                   <div className="pt-3 border-t border-blue-200">
@@ -656,33 +660,33 @@ const Payouts: React.FC = () => {
                                         alt="QR Code thanh toán" 
                                         className="w-48 h-48 object-contain"
                                       />
-                                    </div>
+                              </div>
                                     <p className="text-xs text-blue-600 text-center mt-2">
                                       Quét mã QR để chuyển khoản nhanh
                                     </p>
-                                  </div>
-                                )}
-                                
-                                {/* Quick Copy All Button */}
-                                <div className="pt-2 border-t border-blue-200">
-                                  <button
-                                    onClick={() => {
-                                      const allInfo = `STK: ${agent.bankAccount}\nTên: ${agent.name}\nSố tiền: ${group.netAmount.toLocaleString('vi-VN')} VNĐ${agent.bankBranch ? `\nChi nhánh: ${agent.bankBranch}` : ''}${agent.contactPhone ? `\nSĐT: ${agent.contactPhone}` : ''}`;
-                                      copyToClipboard(allInfo, `All-${agentId}`);
-                                    }}
-                                    className="w-full bg-blue-600 text-white text-sm font-medium py-2 px-4 rounded hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2"
-                                  >
-                                    <Copy className="w-4 h-4" />
-                                    <span>Copy tất cả thông tin chuyển khoản</span>
-                                  </button>
-                                  {copiedText === `All-${agentId}` && (
-                                    <div className="text-center text-xs text-green-600 font-medium mt-1">
-                                      ✅ Đã copy tất cả thông tin!
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
                             </div>
+                          )}
+
+                        {/* Quick Copy All Button */}
+                        <div className="pt-2 border-t border-blue-200">
+                          <button
+                            onClick={() => {
+                              const allInfo = `STK: ${agent.bankAccount}\nTên: ${agent.name}\nSố tiền: ${group.netAmount.toLocaleString('vi-VN')} VNĐ${agent.bankBranch ? `\nChi nhánh: ${agent.bankBranch}` : ''}${agent.contactPhone ? `\nSĐT: ${agent.contactPhone}` : ''}`;
+                              copyToClipboard(allInfo, `All-${agentId}`);
+                            }}
+                            className="w-full bg-blue-600 text-white text-sm font-medium py-2 px-4 rounded hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2"
+                          >
+                            <Copy className="w-4 h-4" />
+                            <span>Copy tất cả thông tin chuyển khoản</span>
+                          </button>
+                          {copiedText === `All-${agentId}` && (
+                            <div className="text-center text-xs text-green-600 font-medium mt-1">
+                              ✅ Đã copy tất cả thông tin!
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                           ) : null;
                         })()}
                         
@@ -729,10 +733,10 @@ const Payouts: React.FC = () => {
                           </div>
                         </div>
                       </div>
+                      </div>
                     </div>
-                  </div>
-                );
-              })()}
+                  );
+                })()}
             </>
           )}
         </div>
