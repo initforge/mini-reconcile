@@ -17,15 +17,21 @@ Sau mỗi lần đối soát, hệ thống tự động **tổng hợp** và **l
 
 #### **1. Theo Mã giao dịch**
 - Hệ thống ghi nhớ: Mã giao dịch này đã được xử lý ở phiên đối soát nào
+- **Đếm TẤT CẢ** transaction codes (kể cả records không có điểm thu/đại lý)
 - Ví dụ: Mã `20407295176354816` đã được xử lý ở phiên A
+- **Lưu ý**: Số này có thể lớn hơn số giao dịch trong "Theo Điểm thu" hoặc "Theo Đại lý" vì bao gồm cả records MISSING_IN_MERCHANT hoặc MISSING_IN_AGENT
 
 #### **2. Theo Điểm thu**
 - Hệ thống tính tổng: Điểm thu này có bao nhiêu giao dịch, tổng tiền bao nhiêu, bao nhiêu khớp, bao nhiêu lỗi
+- **Chỉ đếm** records có `pointOfSaleName` (từ merchant hoặc agent)
 - Ví dụ: Điểm thu "ANCATTUONG66PKV01" có 15 giao dịch, tổng 250 triệu, 12 khớp, 3 lỗi
+- **Lưu ý**: Records không có `pointOfSaleName` sẽ không được tính vào đây
 
 #### **3. Theo Đại lý**
 - Hệ thống tính tổng: Đại lý này có bao nhiêu giao dịch, tổng tiền bao nhiêu, bao nhiêu khớp, bao nhiêu lỗi
+- **Chỉ đếm** records có `agentId` (từ agent submission)
 - Ví dụ: Đại lý A có 25 giao dịch, tổng 500 triệu, 20 khớp, 5 lỗi
+- **Lưu ý**: Records không có `agentId` (ví dụ: MISSING_IN_AGENT) sẽ không được tính vào đây
 
 ---
 
@@ -51,13 +57,17 @@ Khi đối soát lần 2, hệ thống sẽ:
 Sau khi đối soát xong, bạn sẽ thấy:
 
 1. **Card "Dữ liệu Tổng hợp"** với 3 số liệu:
-   - Tổng số mã giao dịch đã xử lý
-   - Tổng số điểm thu
-   - Tổng số đại lý
+   - **Mã giao dịch**: Tổng số unique transaction codes (bao gồm tất cả records)
+   - **Điểm thu**: Số lượng unique điểm thu (chỉ những records có pointOfSaleName)
+   - **Đại lý**: Số lượng unique đại lý (chỉ những records có agentId)
+   
+   **Lưu ý**: Số "Mã giao dịch" có thể lớn hơn số giao dịch trong chi tiết "Theo Điểm thu" hoặc "Theo Đại lý" vì:
+   - Mã giao dịch đếm TẤT CẢ transaction codes
+   - Chi tiết chỉ đếm records có đủ thông tin (pointOfSaleName hoặc agentId)
 
 2. **Khi click "Xem chi tiết"**:
-   - Danh sách điểm thu: Mỗi điểm thu có bao nhiêu giao dịch, khớp, lỗi, tổng tiền
-   - Danh sách đại lý: Mỗi đại lý có bao nhiêu giao dịch, khớp, lỗi, tổng tiền
+   - **Theo Điểm thu**: Danh sách điểm thu với số GD, khớp, lỗi, tổng tiền (chỉ records có pointOfSaleName)
+   - **Theo Đại lý**: Danh sách đại lý với số GD, khớp, lỗi, tổng tiền (chỉ records có agentId)
 
 ---
 

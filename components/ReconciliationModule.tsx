@@ -1584,6 +1584,16 @@ const ReconciliationModule: React.FC = () => {
         sampleAgents: Object.keys(aggregatedData.byAgent).slice(0, 3)
       });
       
+      // Clean undefined values từ aggregatedData trước khi lưu Firebase
+      const cleanAggregatedData = (data: typeof aggregatedData) => {
+        const clean = JSON.parse(JSON.stringify(data, (key, value) => {
+          // Loại bỏ undefined, giữ null
+          if (value === undefined) return null;
+          return value;
+        }));
+        return clean;
+      };
+      
       // Get primary agentId from summary (agent with most transactions)
       const primaryAgentId = Object.entries(summary.byAgent)
         .sort((a, b) => b[1].count - a[1].count)[0]?.[0];
@@ -1601,6 +1611,9 @@ const ReconciliationModule: React.FC = () => {
             r.status === TransactionStatus.ERROR_DUPLICATE
           ).length;
           
+          // Clean aggregatedData trước khi lưu (loại bỏ undefined)
+          const cleanedAggregatedData = cleanAggregatedData(aggregatedData);
+          
           await ReconciliationService.updateSession(sessionId, {
             matchedCount: actualMatched,
             errorCount: actualErrors,
@@ -1610,7 +1623,7 @@ const ReconciliationModule: React.FC = () => {
             agentId: primaryAgentId,
             merchantIds: merchantIds,
             summary: summary,
-            aggregatedData: aggregatedData
+            aggregatedData: cleanedAggregatedData
           });
           
           console.log(`✅ Updated session ${sessionId}: ${actualMatched} matched, ${actualErrors} errors, ${results.length} total`);
@@ -1902,8 +1915,16 @@ const ReconciliationModule: React.FC = () => {
           
           // Lưu lại vào Firebase để lần sau không cần tính lại
           try {
+            // Clean undefined values trước khi lưu
+            const cleanAggregatedData = (data: typeof aggregatedData) => {
+              return JSON.parse(JSON.stringify(data, (key, value) => {
+                if (value === undefined) return null;
+                return value;
+              }));
+            };
+            
             await ReconciliationService.updateSession(sessionId, {
-              aggregatedData: aggregatedData
+              aggregatedData: cleanAggregatedData(aggregatedData)
             });
             console.log('✅ Đã lưu aggregatedData vào Firebase');
           } catch (e) {
