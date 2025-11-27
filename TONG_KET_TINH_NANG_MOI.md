@@ -10,11 +10,6 @@
 ### 📍 Sẽ thấy ở đâu:
 - **Quản lý Đại lý** → Form thêm/sửa đại lý → Field **"Số tài khoản ngân hàng"**
 
-### 🔍 Làm gì sẽ thấy:
-1. Nhập số tài khoản ngân hàng vào form đại lý
-2. Upload ảnh bill trong **Đối soát**
-3. Hệ thống tự động link đại lý (không cần chọn tay)
-
 ### ⚠️ Lưu ý
 Số tài khoản ngân hàng = số hiển thị trên ảnh VNPay (có thể trùng số điện thoại, nhưng đây là số TK ngân hàng)
 
@@ -151,7 +146,7 @@ Số tài khoản ngân hàng = số hiển thị trên ảnh VNPay (có thể t
 
 ---
 
-**Lưu ý**: Tất cả tính năng ở **Bước 3: Kết quả** chỉ hiển thị **SAU KHI ĐỐI SOÁT XONG**
+**Lưu ý**: Tất cả tính năng ở **Bước 3: Kết quả** chỉ hiển thị **SAU KHI ĐỐI SOÁT XONG** hoặc xem được ở lịch sử giao dịch
 
 **Phiên bản**: 2.0  
 **Ngày cập nhật**: 2025-11-18

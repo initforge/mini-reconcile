@@ -1592,11 +1592,20 @@ const ReconciliationModule: React.FC = () => {
           });
           
           console.log(`✅ Updated session ${sessionId}: ${actualMatched} matched, ${actualErrors} errors, ${results.length} total`);
+          console.log(`📊 Aggregated data:`, {
+            byTransactionCode: Object.keys(aggregatedData.byTransactionCode).length,
+            byPointOfSale: Object.keys(aggregatedData.byPointOfSale).length,
+            byAgent: Object.keys(aggregatedData.byAgent).length
+          });
           
-          // Load session data để hiển thị aggregated data
-          const updatedSession = await ReconciliationService.getSessionById(sessionId);
-          if (updatedSession) {
-            setCurrentSessionData(updatedSession);
+          // Set currentSessionData ngay với aggregatedData vừa tính (không cần load lại)
+          const currentSession = await ReconciliationService.getSessionById(sessionId);
+          if (currentSession) {
+            // Đảm bảo aggregatedData được set
+            setCurrentSessionData({
+              ...currentSession,
+              aggregatedData: aggregatedData
+            });
           }
         } catch (e) {
           console.warn('⚠️ Không thể cập nhật session trên Firebase.', e);
