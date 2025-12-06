@@ -4,14 +4,14 @@ import { getDatabase } from 'firebase/database'
 import { getAuth, setPersistence, browserLocalPersistence } from 'firebase/auth'
 
 const firebaseConfig = {
-  apiKey: "AIzaSyAXRZHm1_sJbtBvwVNqhQrimLFz-weFT7Q",
-  authDomain: "billgiaodich-10ae9.firebaseapp.com",
-  databaseURL: "https://billgiaodich-10ae9-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "billgiaodich-10ae9",
-  storageBucket: "billgiaodich-10ae9.firebasestorage.app",
-  messagingSenderId: "899833329716",
-  appId: "1:899833329716:web:df99dd8d5c1d40cae17261",
-  measurementId: "G-QYG88PPTNN"
+  apiKey: "AIzaSyDcVtQ_X70gvYAhqNglg2R_pRP0Rq6gDQ4",
+  authDomain: "qrupcode.firebaseapp.com",
+  databaseURL: "https://qrupcode-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "qrupcode",
+  storageBucket: "qrupcode.firebasestorage.app",
+  messagingSenderId: "949524369430",
+  appId: "1:949524369430:web:3614ebc29f315c3cbb6537",
+  measurementId: "G-0TGZZ2EH7C"
 }
 
 // Initialize Firebase

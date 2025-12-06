@@ -2,16 +2,33 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
-import Dashboard from './components/Dashboard';
 import ReconciliationModule from './components/ReconciliationModule';
+import AdminReport from './components/AdminReport';
 import Login from './components/Login';
-import Personnel from './components/Personnel';
+import HomePage from './components/HomePage';
+import PersonnelManagement from './components/admin/PersonnelManagement';
 import Agents from './components/Agents';
 import Merchants from './components/Merchants';
 import Payouts from './components/Payouts';
 import Reports from './components/Reports';
 import Settings from './components/Settings';
 import { Stats } from './types';
+// User components
+import UserLogin from './components/user/UserLogin';
+import UserRegister from './components/user/UserRegister';
+import UserLayout from './components/user/UserLayout';
+import UploadBill from './components/user/UploadBill';
+import BillHistory from './components/user/BillHistory';
+import UserReport from './components/user/UserReport';
+import PaymentStatus from './components/user/PaymentStatus';
+import UserUtilities from './components/user/UserUtilities';
+// Agent components
+import AgentLogin from './components/agent/AgentLogin';
+import AgentLayout from './components/agent/AgentLayout';
+import AgentReport from './components/agent/AgentReport';
+import AgentReconciliationDetail from './components/agent/AgentReconciliationDetail';
+import AgentPayments from './components/agent/AgentPayments';
+import AgentUtilities from './components/agent/AgentUtilities';
 // import { useAuth } from './src/lib/firebaseHooks'; // Disabled for mock auth
 
 // Placeholder components for views not fully implemented in this demo
@@ -28,36 +45,60 @@ const PlaceholderView = ({ title, icon: Icon, desc }: any) => (
   </div>
 );
 
-// Protected Route Component
+// Protected Route Component for Admin
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const isAuthenticated = localStorage.getItem('mockAuth') === 'true';
-  return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
+  return isAuthenticated ? <>{children}</> : <Navigate to="/admin/login" replace />;
+};
+
+// Protected Route Component for User
+const ProtectedUserRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const userAuth = localStorage.getItem('userAuth');
+  return userAuth ? <>{children}</> : <Navigate to="/user/login" replace />;
+};
+
+// Protected Route Component for Agent
+const ProtectedAgentRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const agentAuth = localStorage.getItem('agentAuth');
+  return agentAuth ? <>{children}</> : <Navigate to="/agent/login" replace />;
+};
+
+// Wrapper component to force remount on route change
+const PayoutsWrapper: React.FC = () => {
+  const location = useLocation();
+  return <Payouts key={location.pathname + location.search} />;
 };
 
 // Layout Component with Sidebar
 const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const location = useLocation();
-  const currentPath = location.pathname.slice(1) || 'dashboard';
+  // Map pathname to activeTab ID for sidebar highlighting
+  const getActiveTab = (pathname: string): string => {
+    if (pathname === '/admin/report' || pathname.startsWith('/admin/report')) {
+      return 'report';
+    }
+    return pathname.slice(1) || 'reconciliation';
+  };
+  const currentPath = getActiveTab(location.pathname);
 
   const handleLogout = () => {
     console.log('🚪 Mock logout triggered');
     localStorage.removeItem('mockAuth');
-    window.location.href = '/login';
+    window.location.href = '/admin/login';
   };
 
   return (
-    <div className="flex min-h-screen bg-slate-50">
+    <div className="flex min-h-screen bg-slate-50" style={{ position: 'relative' }}>
       <Sidebar 
         activeTab={currentPath}
         onLogout={handleLogout}
       />
       
-      <main className="flex-1 ml-64 p-8 overflow-y-auto h-screen">
+      <main className="flex-1 ml-64 p-8 overflow-y-auto h-screen" style={{ position: 'relative', zIndex: 1 }}>
         {/* Header */}
         <header className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">
-              {currentPath === 'dashboard' && 'Tổng quan hệ thống'}
               {currentPath === 'reconciliation' && 'Trung tâm đối soát'}
               {currentPath === 'personnel' && 'Quản lý nhân sự'}
               {currentPath === 'merchants' && 'Danh sách Điểm bán'}
@@ -78,7 +119,7 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         </header>
 
         {/* Content Area */}
-        <div className="animate-fade-in">
+        <div className="animate-fade-in" key={location.pathname}>
           {children}
         </div>
       </main>
@@ -91,30 +132,22 @@ function App() {
   const handleLogin = () => {
     console.log('🔐 Mock login triggered');
     localStorage.setItem('mockAuth', 'true');
-    window.location.href = '/dashboard';
+    window.location.href = '/reconciliation';
   };
 
   return (
     <Router>
       <Routes>
-        {/* Login Route */}
+        {/* Homepage */}
+        <Route path="/" element={<HomePage />} />
+        
+        {/* Admin Login Route (Private) */}
         <Route 
-          path="/login" 
+          path="/admin/login" 
           element={<Login onLogin={handleLogin} />} 
         />
         
         {/* Protected Routes */}
-        <Route 
-          path="/dashboard" 
-          element={
-            <ProtectedRoute>
-              <AppLayout>
-                <Dashboard />
-              </AppLayout>
-            </ProtectedRoute>
-          } 
-        />
-        
         <Route 
           path="/reconciliation" 
           element={
@@ -153,7 +186,7 @@ function App() {
           element={
             <ProtectedRoute>
               <AppLayout>
-                <Personnel />
+                <PersonnelManagement />
               </AppLayout>
             </ProtectedRoute>
           } 
@@ -164,7 +197,7 @@ function App() {
           element={
             <ProtectedRoute>
               <AppLayout>
-                <Payouts />
+                <PayoutsWrapper />
               </AppLayout>
             </ProtectedRoute>
           } 
@@ -192,15 +225,57 @@ function App() {
           } 
         />
         
-        {/* Default Redirects */}
         <Route 
-          path="/" 
-          element={<Navigate to="/dashboard" replace />} 
+          path="/admin/report" 
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <AdminReport />
+              </AppLayout>
+            </ProtectedRoute>
+          } 
         />
         
+        {/* User Routes */}
+        <Route path="/user/login" element={<UserLogin />} />
+        <Route path="/user/register" element={<UserRegister />} />
+        <Route 
+          path="/user" 
+          element={
+            <ProtectedUserRoute>
+              <UserLayout />
+            </ProtectedUserRoute>
+          }
+        >
+          <Route path="upbill" element={<UploadBill />} />
+          <Route path="history" element={<BillHistory />} />
+          <Route path="report" element={<UserReport />} />
+          <Route path="payment" element={<PaymentStatus />} />
+          <Route path="utilities" element={<UserUtilities />} />
+          <Route index element={<Navigate to="/user/upbill" replace />} />
+        </Route>
+
+        {/* Agent Routes */}
+        <Route path="/agent/login" element={<AgentLogin />} />
+        <Route 
+          path="/agent" 
+          element={
+            <ProtectedAgentRoute>
+              <AgentLayout />
+            </ProtectedAgentRoute>
+          }
+        >
+          <Route path="report" element={<AgentReport />} />
+          <Route path="reconciliation/:sessionId" element={<AgentReconciliationDetail />} />
+          <Route path="payment" element={<AgentPayments />} />
+          <Route path="utilities" element={<AgentUtilities />} />
+          <Route index element={<Navigate to="/agent/report" replace />} />
+        </Route>
+        
+        {/* Default Redirects */}
         <Route 
           path="*" 
-          element={<Navigate to="/dashboard" replace />} 
+          element={<Navigate to="/" replace />} 
         />
       </Routes>
     </Router>

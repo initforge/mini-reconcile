@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { LayoutDashboard, Users, Store, FileText, Settings, UploadCloud, CreditCard, UserCog, LogOut, BarChart3 } from 'lucide-react';
+import { Users, Store, FileText, Settings, UploadCloud, CreditCard, UserCog, LogOut, BarChart3 } from 'lucide-react';
 import { SettingsService } from '../src/lib/firebaseServices';
 import { AppSettings } from '../types';
 
@@ -34,11 +34,11 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout }) => {
   };
 
   const menuItems = [
-    { id: 'dashboard', label: 'Tổng quan', icon: LayoutDashboard, path: '/dashboard' },
     { id: 'reconciliation', label: 'Đối soát & Xử lý', icon: FileText, path: '/reconciliation' },
+    { id: 'report', label: 'Báo cáo', icon: BarChart3, path: '/admin/report' },
     { id: 'merchants', label: 'Quản lý Điểm bán', icon: Store, path: '/merchants' },
     { id: 'agents', label: 'Quản lý Đại lý', icon: Users, path: '/agents' },
-    { id: 'personnel', label: 'Quản lý Nhân sự', icon: UserCog, path: '/personnel' },
+    { id: 'personnel', label: 'Quản lý Khách hàng', icon: UserCog, path: '/personnel' },
     { id: 'payouts', label: 'Thanh toán & Công nợ', icon: CreditCard, path: '/payouts' },
     { id: 'settings', label: 'Cấu hình', icon: Settings, path: '/settings' },
   ];
@@ -47,7 +47,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout }) => {
   const logoUrl = settings?.logoUrl;
 
   return (
-    <div className="w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white min-h-screen flex flex-col shadow-2xl fixed left-0 top-0 z-50 border-r border-slate-700">
+    <div className="w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white min-h-screen flex flex-col shadow-2xl fixed left-0 top-0 z-[100] border-r border-slate-700">
       <div className="p-6 border-b border-slate-700/50">
         <div className="flex items-center space-x-3">
           {logoUrl ? (
@@ -78,11 +78,13 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout }) => {
             <Link
               key={item.id}
               to={item.path}
+              replace={false}
               className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 group ${
                 isActive
                   ? 'bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-lg shadow-indigo-500/30'
                   : 'text-slate-400 hover:bg-slate-800/50 hover:text-white'
               }`}
+              style={{ position: 'relative', zIndex: 101, pointerEvents: 'auto' }}
             >
               <Icon className={`w-5 h-5 transition-transform ${isActive ? 'scale-110' : 'group-hover:scale-105'}`} />
               <span className="font-medium text-sm">{item.label}</span>

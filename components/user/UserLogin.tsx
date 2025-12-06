@@ -1,71 +1,76 @@
-
 import React, { useState } from 'react';
-import { Lock, User, ArrowRight, ShieldCheck, UploadCloud } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Lock, Phone, ArrowRight, AlertCircle } from 'lucide-react';
+import { loginUser } from '../../src/lib/authServices';
 
-interface LoginProps {
-  onLogin: () => void;
-}
-
-const Login: React.FC<LoginProps> = ({ onLogin }) => {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('123456');
+const UserLogin: React.FC = () => {
+  const navigate = useNavigate();
+  const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError('');
 
-    console.log('🔐 Mock login attempted with:', { username, password });
+    try {
+      const user = await loginUser(phone, password);
+      
+      if (!user) {
+        setError('Số điện thoại hoặc mật khẩu không đúng');
+        setIsLoading(false);
+        return;
+      }
 
-    // Instant mock login - no delay, always success
-    setTimeout(() => {
+      // Store user in localStorage
+      localStorage.setItem('userAuth', JSON.stringify({ userId: user.id, phone: user.phone }));
+      
+      // Navigate to user dashboard
+      navigate('/user');
+    } catch (err: any) {
+      setError(err.message || 'Đã xảy ra lỗi khi đăng nhập');
+    } finally {
       setIsLoading(false);
-      console.log('✅ Mock login successful');
-      onLogin();
-    }, 100);
+    }
   };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-indigo-900 p-4">
       <div className="w-full max-w-md">
-        {/* Brand Logo */}
-        <div className="flex justify-center mb-8">
-           <div className="flex items-center space-x-3">
-            <div className="w-12 h-12 bg-indigo-500 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/30">
-                <UploadCloud className="w-7 h-7 text-white" />
-            </div>
-            <span className="text-3xl font-bold text-white tracking-tight">PayReconcile</span>
-           </div>
-        </div>
-
         <div className="bg-white rounded-2xl shadow-2xl overflow-hidden">
           <div className="p-8">
             <div className="text-center mb-8">
-              <h2 className="text-2xl font-bold text-slate-800">Đăng nhập Quản trị viên</h2>
-              <p className="text-slate-500 text-sm mt-1">Vui lòng nhập thông tin tài khoản quản trị</p>
+              <h2 className="text-2xl font-bold text-slate-800">Đăng nhập</h2>
+              <p className="text-slate-500 text-sm mt-1">Vui lòng nhập thông tin tài khoản</p>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-5">
               {error && (
-                <div className="bg-red-50 border border-red-100 text-red-600 text-sm p-3 rounded-lg">
+                <div className="bg-red-50 border border-red-100 text-red-600 text-sm p-3 rounded-lg flex items-center">
+                  <AlertCircle className="w-4 h-4 mr-2" />
                   {error}
                 </div>
               )}
 
               <div className="space-y-1">
-                <label className="block text-sm font-medium text-slate-700">Tên đăng nhập</label>
+                <label className="block text-sm font-medium text-slate-700">Số điện thoại</label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <User className="h-5 w-5 text-slate-400" />
+                    <Phone className="h-5 w-5 text-slate-400" />
                   </div>
                   <input
-                    type="text"
+                    type="tel"
                     className="block w-full pl-10 pr-3 py-2.5 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
-                    placeholder="Nhập tên đăng nhập"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="Nhập số điện thoại (ví dụ: 0932433xxx)"
+                    value={phone}
+                    onChange={(e) => {
+                      // Cho phép số và chữ x/X
+                      const value = e.target.value.replace(/[^0-9xX]/g, '');
+                      setPhone(value);
+                    }}
+                    required
                   />
                 </div>
               </div>
@@ -82,16 +87,9 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                     placeholder="••••••••"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
+                    required
                   />
                 </div>
-              </div>
-
-              <div className="flex items-center justify-between text-sm">
-                <div className="flex items-center">
-                  <input id="remember-me" type="checkbox" className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded" />
-                  <label htmlFor="remember-me" className="ml-2 block text-slate-600">Ghi nhớ đăng nhập</label>
-                </div>
-                <a href="#" className="font-medium text-indigo-600 hover:text-indigo-500">Quên mật khẩu?</a>
               </div>
 
               <button
@@ -110,11 +108,17 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                   </>
                 )}
               </button>
+
+              <div className="text-center">
+                <button
+                  type="button"
+                  onClick={() => navigate('/user/register')}
+                  className="text-sm text-indigo-600 hover:text-indigo-500"
+                >
+                  Chưa có tài khoản? Đăng ký ngay
+                </button>
+              </div>
             </form>
-          </div>
-          <div className="px-8 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-center">
-            <ShieldCheck className="w-4 h-4 text-slate-400 mr-2" />
-            <span className="text-xs text-slate-500">Bảo mật với chuẩn SSL 256-bit</span>
           </div>
         </div>
       </div>
@@ -122,4 +126,5 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   );
 };
 
-export default Login;
+export default UserLogin;
+

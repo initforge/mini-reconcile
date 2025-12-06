@@ -1,20 +1,26 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Play, AlertTriangle, CheckCircle, XCircle, Download, Search, FileText, BrainCircuit, Trash2, FileSpreadsheet, History, Plus, X, RotateCcw, Image as ImageIcon, Loader2, Edit2, Filter, Save, Eye } from 'lucide-react';
+import { Upload, Play, AlertTriangle, CheckCircle, XCircle, Download, Search, FileText, BrainCircuit, Trash2, FileSpreadsheet, History, Plus, X, RotateCcw, Image as ImageIcon, Loader2, Edit2, Filter, Save, Eye, AlertCircle } from 'lucide-react';
 import { remove } from 'firebase/database';
 import Pagination from './Pagination';
-import { ReconciliationRecord, TransactionStatus, PaymentMethod, MerchantTransaction, AgentSubmission, ReconciliationSession, Merchant, Agent, Payment } from '../types';
+import { ReconciliationRecord, TransactionStatus, PaymentMethod, MerchantTransaction, AgentSubmission, ReconciliationSession, Merchant, Agent, Payment, AgentReconciliationSession } from '../types';
 import { generateMockFiles } from '../constants';
 import { generateReconciliationReport, extractTransactionFromImage } from '../services/geminiService';
-import { ReconciliationService, SettingsService, PaymentsService } from '../src/lib/firebaseServices';
+import { ReconciliationService, SettingsService, PaymentsService, MerchantTransactionsService } from '../src/lib/firebaseServices';
+import { AgentReconciliationService } from '../src/lib/agentReconciliationServices';
+import { ReportService } from '../src/lib/reportServices';
+import { UserService } from '../src/lib/userServices';
 import { get, ref } from 'firebase/database';
 import { database } from '../src/lib/firebase';
 import { createStyledWorkbook, createStyledSheet, addMetadataSheet, exportWorkbook, identifyNumberColumns, identifyDateColumns } from '../src/utils/excelExportUtils';
 import * as XLSX from 'xlsx';
 import { parseExcel, findKey, parseAmount, normalize, guessTransactionCode } from '../src/utils/excelParserUtils';
 import { useRealtimeData, FirebaseUtils } from '../src/lib/firebaseHooks';
+import PendingBillsPanel from './reconciliation/PendingBillsPanel';
+import UserBillsModal from './reconciliation/UserBillsModal';
+import type { UserBill, ReportRecord, ReportStatus } from '../types';
 
 const ReconciliationModule: React.FC = () => {
-  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [step, setStep] = useState<0 | 1 | 2>(0); // Step 0: Upload merchants, Step 1: Process, Step 2: Results
   
   // Firebase hooks for merchants and agents
   const { data: merchantsData } = useRealtimeData<Record<string, Merchant>>('/merchants');
@@ -22,26 +28,28 @@ const ReconciliationModule: React.FC = () => {
   const merchants = FirebaseUtils.objectToArray(merchantsData || {});
   const agents = FirebaseUtils.objectToArray(agentsData || {});
   
+  // Admin reconciles all users - no agent selection needed
+  // No longer need session loading - admin reconciles all pending bills directly
+
+  // Helper: Timezone-safe date range
+  const getDateRange = (dateStr: string): { start: Date; end: Date } => {
+    const date = new Date(dateStr + 'T00:00:00');
+    const start = new Date(date);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(date);
+    end.setHours(23, 59, 59, 999);
+    return { start, end };
+  };
+  
+  // No longer need agent link paste - admin reconciles all users
+  
   // File State - Updated for multi-file support
   const [merchantFiles, setMerchantFiles] = useState<File[]>([]);
-  const [agentFiles, setAgentFiles] = useState<File[]>([]); // Now contains image files
   const [isProcessingFiles, setIsProcessingFiles] = useState(false);
-  const [isProcessingAgentFiles, setIsProcessingAgentFiles] = useState(false);
   const [mergeProgress, setMergeProgress] = useState(0);
-  const [agentMergeProgress, setAgentMergeProgress] = useState(0);
-  
-  // Agent Image & OCR State
-  const [agentImages, setAgentImages] = useState<string[]>([]); // Base64 previews
-  const [agentOcrResults, setAgentOcrResults] = useState<{
-    file: File;
-    result?: AgentSubmission;
-    error?: string;
-    status: 'pending' | 'processing' | 'success' | 'error';
-  }[]>([]);
   
   // Parsed Data State
   const [merchantData, setMerchantData] = useState<MerchantTransaction[]>([]);
-  const [agentData, setAgentData] = useState<AgentSubmission[]>([]);
   
   // Merchant matching warnings
   const [merchantMatchWarnings, setMerchantMatchWarnings] = useState<Map<string, string>>(new Map());
@@ -51,6 +59,13 @@ const ReconciliationModule: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [aiReport, setAiReport] = useState<string>('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  
+  // Admin reconciliation results (new system)
+  const [adminReconciliationResults, setAdminReconciliationResults] = useState<{
+    matched: number;
+    errors: number;
+    results: Array<{ billId: string; status: 'MATCHED' | 'ERROR'; errorMessage?: string }>;
+  } | null>(null);
   
   // Filter state
   const [statusFilter, setStatusFilter] = useState<'all' | 'matched' | 'error'>('all');
@@ -69,6 +84,10 @@ const ReconciliationModule: React.FC = () => {
   const [showHistory, setShowHistory] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   
+  // Tab navigation state
+  const [activeTab, setActiveTab] = useState<'reconciliation' | 'history'>('reconciliation');
+  const [selectedHistoryDate, setSelectedHistoryDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  
   // Pagination state for session history (lazy loading)
   const [historyPage, setHistoryPage] = useState(1);
   const historyItemsPerPage = 5;
@@ -78,7 +97,12 @@ const ReconciliationModule: React.FC = () => {
 
   // Refs for hidden file inputs
   const merchantInputRef = useRef<HTMLInputElement>(null);
-  const agentInputRef = useRef<HTMLInputElement>(null);
+
+  // Pending bills panel state
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [selectedUserName, setSelectedUserName] = useState<string>('');
+  const [showUserBillsModal, setShowUserBillsModal] = useState(false);
+  const [currentUploadSessionId, setCurrentUploadSessionId] = useState<string | null>(null);
 
   // Load session history on component mount (lazy loading - chỉ load trang đầu)
   useEffect(() => {
@@ -230,7 +254,7 @@ const ReconciliationModule: React.FC = () => {
           continue;
         }
 
-        const mappedData: MerchantTransaction[] = rawData.map((row: any, index) => {
+        const mappedData: (MerchantTransaction | null)[] = rawData.map((row: any, index) => {
           // Process same as single file but with file source tracking
           // Extract point of sale information TRƯỚC để tránh lấy nhầm
           const pointOfSaleName = findKey(row, ['điểm thu', 'tên điểm thu', 'point of sale', 'pos name', 'collection point']);
@@ -348,11 +372,30 @@ const ReconciliationModule: React.FC = () => {
             }
           }
           
-          transactionCode = String(transactionCode || `UNK_${file.name}_${index}`);
+          // Only use UNK_ as last resort if we really can't find anything
+          if (!transactionCode || transactionCode === '') {
+            // Try one more time: look for any numeric value >= 10 digits
+            const allValues = Object.values(row).map(v => String(v || '').trim()).filter(v => v && /^\d{10,}$/.test(v));
+            if (allValues.length > 0) {
+              transactionCode = allValues[0];
+              console.log(`✅ Row ${index}: Found transactionCode from numeric value: ${transactionCode}`);
+            } else {
+              transactionCode = `UNK_${file.name}_${index}`;
+              console.warn(`⚠️ Row ${index}: Cannot find transactionCode, using UNK_${file.name}_${index}`);
+            }
+          } else {
+            transactionCode = String(transactionCode);
+          }
           
           // Validate: transactionCode không được là pointOfSaleName
           if (transactionCode === pointOfSaleName) {
             console.error(`❌ Row ${index}: transactionCode vẫn trùng với pointOfSaleName: ${transactionCode}`);
+            // Try to find another value
+            const allValues = Object.values(row).map(v => String(v || '').trim()).filter(v => v && v !== pointOfSaleName && v.length >= 6);
+            if (allValues.length > 0) {
+              transactionCode = allValues[0];
+              console.log(`✅ Row ${index}: Replaced transactionCode with: ${transactionCode}`);
+            }
           }
           
           // Check for duplicates - CHỈ dựa trên transactionCode
@@ -433,15 +476,23 @@ const ReconciliationModule: React.FC = () => {
             }
           }
           
+          // Parse số tiền sau KM (dùng để hiển thị)
           const parsedAmount = parseAmount(amount);
           
-          // Validate: amount phải >= 1000 VND, nếu không thì skip row này
-          if (!parsedAmount || parsedAmount < 1000) {
+          // Parse số tiền trước KM (dùng để match)
+          const amountBeforeDiscountKey = findKey(row, [
+            'số tiền trước km', 'số tiền trước khuyến mại', 'amount before discount', 
+            'giá trị trước km', 'tổng tiền trước km'
+          ]);
+          const amountBeforeDiscount = amountBeforeDiscountKey ? parseAmount(amountBeforeDiscountKey) : parsedAmount;
+          
+          // Validate: amount phải >= 100 VND (giảm threshold để parse được nhiều hơn), nếu không thì skip row này
+          if (!parsedAmount || parsedAmount < 100) {
             console.warn(`⚠️ Row ${index}: Amount không hợp lệ (${parsedAmount}), skip row này`);
             return null; // Skip row này
           }
           
-          console.log(`💰 Row ${index} - Final parsed amount: ${parsedAmount} (from: ${amount})`);
+          console.log(`💰 Row ${index} - Final parsed amount: ${parsedAmount} (from: ${amount}), amountBeforeDiscount: ${amountBeforeDiscount}`);
           amount = parsedAmount;
           const timestamp = String(
             findKey(row, ['thời gian','thời gian giao dịch','ngày','ngày giao dịch','time','date','datetime','created']) 
@@ -452,6 +503,11 @@ const ReconciliationModule: React.FC = () => {
           // Extract point of sale information (pointOfSaleName đã được extract ở trên)
           const pointOfSaleCode = findKey(row, ['mã điểm thu', 'mã điểm bán', 'point of sale code', 'pos code', 'collection point code']);
           const branchName = findKey(row, ['chi nhánh', 'branch', 'branch name', 'tên chi nhánh']);
+          
+          // Parse thêm các field mới
+          const invoiceNumber = findKey(row, ['số hóa đơn', 'invoice number', 'invoice', 'hóa đơn', 'so hoa don']);
+          const phoneNumber = findKey(row, ['số điện thoại', 'phone number', 'phone', 'sdt', 'so dien thoai']);
+          const promotionCode = findKey(row, ['mã khuyến mại', 'promotion code', 'promo code', 'ma khuyen mai', 'mã km']);
           
           // Match merchant via point of sale ONLY (không check merchantCode/merchant name)
           let matchedMerchant: Merchant | null = null;
@@ -469,17 +525,43 @@ const ReconciliationModule: React.FC = () => {
             }
           }
           
+          // Convert timestamp to ISO format for transactionDate with validation
+          let transactionDate: string;
+          try {
+            if (timestamp.includes('T')) {
+              // Already ISO format
+              transactionDate = timestamp;
+            } else {
+              // Try to parse as date
+              const parsedDate = new Date(timestamp);
+              if (isNaN(parsedDate.getTime())) {
+                // Invalid date, use current date
+                console.warn(`⚠️ Row ${index}: Invalid timestamp "${timestamp}", using current date`);
+                transactionDate = new Date().toISOString();
+              } else {
+                transactionDate = parsedDate.toISOString();
+              }
+            }
+          } catch (error) {
+            console.warn(`⚠️ Row ${index}: Error parsing timestamp "${timestamp}": ${error}, using current date`);
+            transactionDate = new Date().toISOString();
+          }
+          
           return {
             id: `MER_${file.name}_${index}`,
-            merchantCode: matchedMerchant?.code || 'N/A', // Chỉ dùng để display, không dùng để match
+            merchantCode: matchedMerchant?.code || 'MER_UPLOAD', // Default to MER_UPLOAD if no match
             transactionCode,
-            amount,
-            timestamp,
-            method,
-            sourceFile: file.name, // Track source file
+            amount, // Số tiền sau KM
+            amountBeforeDiscount: amountBeforeDiscount || undefined, // Số tiền trước KM (dùng để match)
+            transactionDate,
+            uploadSessionId: '', // Will be set when saving to DB
             pointOfSaleName: pointOfSaleName ? String(pointOfSaleName) : undefined,
             pointOfSaleCode: pointOfSaleCode ? String(pointOfSaleCode) : undefined,
-            branchName: branchName ? String(branchName) : undefined
+            branchName: branchName ? String(branchName) : undefined,
+            invoiceNumber: invoiceNumber ? String(invoiceNumber) : undefined,
+            phoneNumber: phoneNumber ? String(phoneNumber) : undefined,
+            promotionCode: promotionCode ? String(promotionCode) : undefined,
+            rawRowIndex: index
           };
         });
 
@@ -494,12 +576,17 @@ const ReconciliationModule: React.FC = () => {
       const validData = allMerchantData.filter(item => {
         // TransactionCode không được là pointOfSaleName
         if (item.transactionCode === item.pointOfSaleName) {
-          console.error(`❌ Invalid: transactionCode trùng với pointOfSaleName: "${item.transactionCode}" - Skip row from ${item.sourceFile}`);
+          console.error(`❌ Invalid: transactionCode trùng với pointOfSaleName: "${item.transactionCode}" - Skip row`);
           return false;
         }
-        // TransactionCode phải có độ dài hợp lý (ít nhất 6 ký tự, không phải UNK_xxx)
+        // TransactionCode phải có độ dài hợp lý (ít nhất 3 ký tự)
+        if (!item.transactionCode || item.transactionCode.length < 3) {
+          console.warn(`⚠️ Warning: transactionCode quá ngắn: "${item.transactionCode}" - Skip row`);
+          return false;
+        }
+        // Warn về UNK_xxx nhưng vẫn giữ lại để có thể xử lý sau
         if (item.transactionCode.startsWith('UNK_')) {
-          console.warn(`⚠️ Warning: transactionCode là UNK_xxx: "${item.transactionCode}" - Row from ${item.sourceFile}`);
+          console.warn(`⚠️ Warning: transactionCode là UNK_xxx: "${item.transactionCode}" - Vẫn giữ lại để xử lý`);
         }
         return true;
       });
@@ -546,214 +633,79 @@ const ReconciliationModule: React.FC = () => {
       setMerchantData(uniqueData);
       console.log(`🎯 Final merged data: ${uniqueData.length} unique transactions from ${files.length} files`);
       
+      // Save to merchant_transactions with uploadSessionId
+      const uploadSessionId = `UPLOAD_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      setCurrentUploadSessionId(uploadSessionId);
+      
+      console.log(`💾 Saving ${uniqueData.length} merchant transactions to database...`);
+      const transactionsToSave = uniqueData.map(item => {
+        // Map old MerchantTransaction format to new format
+        let transactionDate: string;
+        try {
+          // If item already has transactionDate (new format), use it
+          if ('transactionDate' in item && item.transactionDate) {
+            transactionDate = item.transactionDate;
+          } else if ('timestamp' in item && item.timestamp) {
+            // Old format - convert timestamp to transactionDate
+            const timestamp = item.timestamp;
+            if (timestamp.includes('T')) {
+              transactionDate = timestamp;
+            } else {
+              const parsedDate = new Date(timestamp);
+              if (isNaN(parsedDate.getTime())) {
+                console.warn(`⚠️ Invalid timestamp "${timestamp}", using current date`);
+                transactionDate = new Date().toISOString();
+              } else {
+                transactionDate = parsedDate.toISOString();
+              }
+            }
+          } else {
+            // No timestamp, use current date
+            transactionDate = new Date().toISOString();
+          }
+        } catch (error) {
+          console.warn(`⚠️ Error parsing date for transaction ${item.transactionCode}: ${error}, using current date`);
+          transactionDate = new Date().toISOString();
+        }
+        
+        return {
+          merchantCode: item.merchantCode || 'MER_UPLOAD',
+          transactionCode: item.transactionCode,
+          amount: item.amount,
+          amountBeforeDiscount: item.amountBeforeDiscount || undefined,
+          transactionDate: transactionDate,
+          uploadSessionId: uploadSessionId,
+          pointOfSaleName: item.pointOfSaleName || undefined,
+          pointOfSaleCode: item.pointOfSaleCode || undefined,
+          branchName: item.branchName || undefined,
+          invoiceNumber: item.invoiceNumber || undefined,
+          phoneNumber: item.phoneNumber || undefined,
+          promotionCode: item.promotionCode || undefined,
+          rawRowIndex: item.rawRowIndex // Preserve rawRowIndex if available
+        };
+      });
+      
+      await MerchantTransactionsService.createBatch(transactionsToSave);
+      console.log(`✅ Saved ${transactionsToSave.length} merchant transactions with uploadSessionId: ${uploadSessionId}`);
+      
+      // Reset input sau khi xử lý thành công để có thể upload lại
+      if (merchantInputRef.current) {
+        merchantInputRef.current.value = '';
+      }
+      
     } catch (error) {
       console.error('Error processing merchant files:', error);
       alert(`Lỗi khi xử lý files: ${error}`);
+      // Reset input on error để có thể upload lại
+      if (merchantInputRef.current) {
+        merchantInputRef.current.value = '';
+      }
     } finally {
       setIsProcessingFiles(false);
       setMergeProgress(0);
     }
   };
 
-  // Handle agent images upload (screenshots from VNPay app)
-  const handleAgentImagesUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    if (files.length === 0) return;
-
-    // Validate file types - only images
-    const invalidFiles = files.filter(file => !file.type.startsWith('image/'));
-    if (invalidFiles.length > 0) {
-      alert(`Các file không hợp lệ: ${invalidFiles.map(f => f.name).join(', ')}\nVui lòng chọn file ảnh (JPG, PNG, WebP)`);
-      return;
-    }
-
-    // Validate file size (max 5MB per image)
-    const oversizedFiles = files.filter(file => file.size > 5 * 1024 * 1024);
-    if (oversizedFiles.length > 0) {
-      alert(`Các file quá lớn (tối đa 5MB): ${oversizedFiles.map(f => f.name).join(', ')}`);
-      return;
-    }
-
-    setAgentFiles(files);
-    
-    // Convert to base64 for preview
-    const base64Promises = files.map(file => {
-      return new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          resolve(e.target?.result as string);
-        };
-        reader.readAsDataURL(file);
-      });
-    });
-    
-    const base64Images = await Promise.all(base64Promises);
-    setAgentImages(base64Images);
-    
-    // Initialize OCR results state
-    const initialResults = files.map(file => ({
-      file,
-      status: 'pending' as const
-    }));
-    setAgentOcrResults(initialResults);
-    
-    // Auto-start OCR processing
-    await processAgentImages(files, base64Images);
-  };
-
-  // Process agent images with OCR
-  const processAgentImages = async (files: File[], base64Images: string[]) => {
-    setIsProcessingAgentFiles(true);
-    setAgentMergeProgress(0);
-    
-    const allAgentData: AgentSubmission[] = [];
-    const updatedResults: Array<{
-      file: File;
-      status: 'pending' | 'processing' | 'success' | 'error';
-      result?: AgentSubmission;
-      error?: string;
-    }> = files.map(file => ({
-      file,
-      status: 'pending' as const
-    }));
-    
-    try {
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const base64 = base64Images[i];
-        const progress = Math.round(((i + 1) / files.length) * 100);
-        setAgentMergeProgress(progress);
-        
-        // Update status to processing
-        updatedResults[i] = { ...updatedResults[i], status: 'processing' as const };
-        setAgentOcrResults([...updatedResults]);
-        
-        try {
-          console.log(`🔍 OCR processing image ${i + 1}/${files.length}:`, file.name);
-          
-          // Extract agent ID from filename (fallback)
-          const agentIdFromFile = file.name.replace(/\.(jpg|jpeg|png|webp)$/i, '').toUpperCase() || 'unknown';
-          
-          // Call OCR service (with built-in retry logic)
-          const result = await extractTransactionFromImage(base64, agentIdFromFile);
-          
-          // Auto-link agent bằng bankAccount (số tài khoản ngân hàng) nếu có
-          if (result.bankAccount) {
-            const ocrBankAccount = result.bankAccount.replace(/[^\d]/g, '');
-            const matchedAgent = agents.find(a => {
-              const agentBankAccount = a.bankAccount?.replace(/[^\d]/g, '') || '';
-              return agentBankAccount && agentBankAccount === ocrBankAccount;
-            });
-            
-            if (matchedAgent) {
-              result.agentId = matchedAgent.id;
-              console.log(`🔗 Auto-linked agent: ${matchedAgent.name} (${matchedAgent.code}) via bankAccount: ${ocrBankAccount}`);
-            } else {
-              console.warn(`⚠️ Không tìm thấy đại lý với bankAccount: ${ocrBankAccount}`);
-            }
-          }
-          
-          // Update status to success
-          updatedResults[i] = {
-            file,
-            result,
-            status: 'success' as const
-          };
-          setAgentOcrResults([...updatedResults]);
-          
-          allAgentData.push(result);
-          console.log(`✅ OCR success for ${file.name}:`, result);
-          
-          // Increased delay to avoid rate limiting (especially for 503 errors)
-          if (i < files.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 2000)); // 2 seconds between requests
-          }
-        } catch (error: any) {
-          console.error(`❌ OCR error for ${file.name}:`, error);
-          
-          // Provide more user-friendly error message
-          let errorMessage = error.message || 'Không thể đọc thông tin từ ảnh';
-          if (errorMessage.includes('overloaded') || errorMessage.includes('503')) {
-            errorMessage = 'Model đang quá tải. Vui lòng thử lại sau vài giây.';
-          } else if (errorMessage.includes('429') || errorMessage.includes('rate limit')) {
-            errorMessage = 'Quá nhiều yêu cầu. Vui lòng đợi vài giây rồi thử lại.';
-          }
-          
-          updatedResults[i] = {
-            file,
-            error: errorMessage,
-            status: 'error' as const
-          };
-          setAgentOcrResults([...updatedResults]);
-        }
-      }
-      
-      setAgentData(allAgentData);
-      console.log(`✅ Processed ${allAgentData.length} images successfully`);
-    } catch (error) {
-      console.error('Error processing agent images:', error);
-      alert(`Lỗi khi xử lý ảnh: ${error}`);
-    } finally {
-      setIsProcessingAgentFiles(false);
-      setAgentMergeProgress(0);
-    }
-  };
-
-  // Retry OCR for a failed image
-  const retryOcr = async (index: number) => {
-    const file = agentFiles[index];
-    const base64 = agentImages[index];
-    if (!file || !base64) return;
-    
-    const updatedResults = [...agentOcrResults];
-    updatedResults[index] = { ...updatedResults[index], status: 'processing' };
-    setAgentOcrResults([...updatedResults]);
-    
-    try {
-      // Add delay before retry to avoid immediate rate limiting
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      const agentIdFromFile = file.name.replace(/\.(jpg|jpeg|png|webp)$/i, '').toUpperCase() || 'unknown';
-      const result = await extractTransactionFromImage(base64, agentIdFromFile);
-      
-        // Auto-link agent bằng bankAccount (số tài khoản ngân hàng) nếu có
-        if (result.bankAccount) {
-          const ocrBankAccount = result.bankAccount.replace(/[^\d]/g, '');
-          const matchedAgent = agents.find(a => {
-            const agentBankAccount = a.bankAccount?.replace(/[^\d]/g, '') || '';
-            return agentBankAccount && agentBankAccount === ocrBankAccount;
-          });
-          
-          if (matchedAgent) {
-            result.agentId = matchedAgent.id;
-            console.log(`🔗 Auto-linked agent: ${matchedAgent.name} (${matchedAgent.code}) via bankAccount: ${ocrBankAccount}`);
-          }
-        }
-      
-      updatedResults[index] = { file, result, status: 'success' };
-      setAgentOcrResults([...updatedResults]);
-      
-      // Update agentData
-      const newAgentData = [...agentData];
-      const existingIndex = newAgentData.findIndex(a => a.id === result.id);
-      if (existingIndex >= 0) {
-        newAgentData[existingIndex] = result;
-      } else {
-        newAgentData.push(result);
-      }
-      setAgentData(newAgentData);
-      
-      console.log(`✅ Retry successful for ${file.name}`);
-    } catch (error: any) {
-      console.error(`❌ Retry failed for ${file.name}:`, error);
-      updatedResults[index] = {
-        file,
-        error: error.message || 'Không thể đọc thông tin từ ảnh',
-        status: 'error'
-      };
-      setAgentOcrResults([...updatedResults]);
-    }
-  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'merchant' | 'agent') => {
     const file = e.target.files?.[0];
@@ -875,81 +827,6 @@ const ReconciliationModule: React.FC = () => {
         } else {
           alert('⚠️ Không tìm thấy dữ liệu hợp lệ trong file Merchant. Kiểm tra lại cột: Mã GD, Số tiền');
         }
-      } else {
-        setAgentFiles([file]);
-        const mappedData: AgentSubmission[] = rawData.map((row: any, index) => {
-          console.log(`🔄 Processing agent row ${index}:`, row);
-          
-          const agentId = String(findKey(row, ['đại lý', 'agent', 'nguồn', 'source', 'merchant', 'store']) || 'Unknown Agent');
-          // Try to find agent transaction code in more places
-          let transactionCode = findKey(row, [
-            'mã giao dịch','mã gd','mã chuẩn chi','mã truy tiền','transaction','transaction id','id','reference','ref','txn','trace','stan','rrn'
-          ]);
-          
-          // If not found, look for any cell that looks like a transaction ID
-          if (!transactionCode || transactionCode === '') {
-            const guess = guessTransactionCode(row);
-            if (guess) transactionCode = guess;
-          }
-          
-          transactionCode = String(transactionCode || `UNK_${index}`);
-          
-          // Look for amount in multiple ways
-          let amount = findKey(row, [
-            'số tiền sau km','số tiền trước km','số tiền','số tiền thực thu','thành tiền','tổng tiền','amount','amount vnd','giá trị','vnd','money','value','total','sum','tổng'
-          ]);
-          
-          // If not found, find any numeric column
-          if (!amount || parseAmount(amount) === 0) {
-            const numericKeys = Object.keys(row).filter(k => {
-              const val = parseAmount(row[k]);
-              return !isNaN(val) && val > 0 && val < 10000000000; // reasonable amount range
-            });
-            if (numericKeys.length > 0) amount = row[numericKeys[0]];
-          }
-          amount = parseAmount(amount) || 0;
-          const timestamp = String(
-            findKey(row, ['thời gian gd','thời gian đối soát','thời gian','thời gian giao dịch','ngày','ngày giao dịch','time','date','datetime','created']) 
-            || new Date().toISOString()
-          );
-          
-          console.log(`✅ Mapped agent row ${index}:`, { agentId, transactionCode, amount, timestamp });
-          
-          return {
-            id: `AG_${index}`,
-            agentId,
-            transactionCode,
-            amount,
-            timestamp
-          };
-        }).filter(item => {
-          console.log('🔍 Validating agent row:', item);
-          
-          // More flexible validation
-          const hasValidCode = item.transactionCode && 
-                               item.transactionCode !== '' && 
-                               !item.transactionCode.startsWith('UNK_');
-          const hasValidAmount = item.amount && Number(item.amount) > 0;
-          
-          console.log('💰 Agent validation:', { 
-            code: item.transactionCode, 
-            codeValid: hasValidCode,
-            amount: item.amount, 
-            amountValid: hasValidAmount 
-          });
-          
-          const isValid = hasValidCode && hasValidAmount;
-          if (!isValid) console.log('❌ Filtered out invalid agent row:', item);
-          return isValid;
-        });
-
-        console.log(`Đã parse ${mappedData.length} giao dịch agent`);
-        setAgentData(mappedData);
-        if (mappedData.length > 0) {
-          alert(`✅ Đã tải thành công ${mappedData.length} giao dịch từ file Agent`);
-        } else {
-          alert('⚠️ Không tìm thấy dữ liệu hợp lệ trong file Agent. Kiểm tra lại cột: Mã GD, Số tiền');
-        }
       }
     } catch (error) {
       console.error("Error parsing excel:", error);
@@ -969,743 +846,408 @@ const ReconciliationModule: React.FC = () => {
         timestamp: m.time,
         method: m.method
     }));
-    
-    const mappedAgent: AgentSubmission[] = agentFile.map((a, i) => ({
-        id: `MOCK_A_${i}`,
-        agentId: a.agent,
-        transactionCode: a.code,
-        amount: a.amount,
-        timestamp: new Date().toISOString()
-    }));
 
     setMerchantData(mappedMerch);
-    setAgentData(mappedAgent);
     
-    // Create fake file objects for UI state - Updated for multi-file support
+    // Create fake file objects for UI state
     const demoMerchantFiles = [
       new File([""], "demo_merchant_data_1.xlsx"),
       new File([""], "demo_merchant_data_2.xlsx")
     ];
-    const demoAgentFiles = [
-      new File([""], "demo_agent_DL_MK.xlsx"),
-      new File([""], "demo_agent_DL_CG.xlsx")
-    ];
     setMerchantFiles(demoMerchantFiles);
-    setAgentFiles(demoAgentFiles);
+  };
+
+  // Core reconciliation function: Compare merchant transactions vs session records
+  const performReconciliation = (
+    merchantTransactions: MerchantTransaction[],
+    baseRecords: ReconciliationRecord[]
+  ): ReconciliationRecord[] => {
+    // Extract agentData from session records (only source for admin reconciliation)
+    const baseAgentData: AgentSubmission[] = baseRecords
+      .filter(r => r.agentData)
+      .map(r => r.agentData!);
+
+    if (merchantTransactions.length === 0 || baseAgentData.length === 0) {
+      return [];
+    }
+
+    // Load paid transactions to check for double payment
+    // This will be handled in handleProcess, but we need the logic here too
+    // For now, we'll create records without payment checks (handled in handleProcess)
+    const results: ReconciliationRecord[] = [];
+    const processedAgentCodes = new Set<string>();
+    const agentDuplicateMap = new Map<string, AgentSubmission[]>();
+    
+    // Step 1: INDEX MERCHANT DATA (O(n) - chỉ làm 1 lần)
+    const merchantIndex = new Map<string, MerchantTransaction>();
+    merchantTransactions.forEach(m => {
+      merchantIndex.set(m.transactionCode, m); // Match by transactionCode only
+    });
+    
+    // Step 2: Detect duplicates in Agent data
+    baseAgentData.forEach((agentTx) => {
+      if (!agentDuplicateMap.has(agentTx.transactionCode)) {
+        agentDuplicateMap.set(agentTx.transactionCode, []);
+      }
+      agentDuplicateMap.get(agentTx.transactionCode)!.push(agentTx);
+    });
+
+    // Step 3: FAST MATCHING với early exit (O(m) với O(1) lookup per tx)
+    baseAgentData.forEach((agentTx, agentIndex) => {
+      const code = agentTx.transactionCode;
+      const merchantMatch = merchantIndex.get(code);
+      const duplicateCount = agentDuplicateMap.get(code)?.length || 1;
+      const isFirstOccurrence = !processedAgentCodes.has(code);
+      
+      // Check for duplicate
+      if (duplicateCount > 1 && !isFirstOccurrence) {
+        return; // Skip subsequent duplicates
+      }
+      
+      let status: TransactionStatus;
+      let diff = 0;
+      let errorDetail = '';
+      let errorType: ReconciliationRecord['errorType'] = undefined;
+      
+      // Check 1: Duplicate
+      if (duplicateCount > 1 && isFirstOccurrence) {
+        status = TransactionStatus.ERROR_DUPLICATE;
+        errorType = 'DUPLICATE';
+        errorDetail = `Bill ${code} bị trùng ${duplicateCount} lần`;
+        diff = 0;
+      }
+      // Check 2: Missing in Merchant
+      else if (!merchantMatch) {
+        status = TransactionStatus.MISSING_IN_MERCHANT;
+        errorType = 'MISSING_MERCHANT';
+        errorDetail = `Bill ${code} không tồn tại trong hệ thống Merchant`;
+        diff = 0;
+      }
+      // Check 3: Amount mismatch
+      else if (Math.abs(merchantMatch.amount - agentTx.amount) > 0.01) {
+        status = TransactionStatus.ERROR_AMOUNT;
+        errorType = 'WRONG_AMOUNT';
+        errorDetail = `Sai số tiền: Merchant ${merchantMatch.amount.toLocaleString('vi-VN')}đ vs Agent ${agentTx.amount.toLocaleString('vi-VN')}đ`;
+        diff = agentTx.amount - merchantMatch.amount;
+      }
+      // All good - MATCHED
+      else {
+        status = TransactionStatus.MATCHED;
+        errorDetail = '';
+        diff = 0;
+      }
+
+      // Find merchant by point of sale
+      const matchedMerchant = merchants.find(m => 
+        m.pointOfSaleName === merchantMatch?.pointOfSaleName ||
+        m.pointOfSaleCode === merchantMatch?.pointOfSaleCode
+      );
+
+      const completeRecord: ReconciliationRecord = {
+        id: `REC_${Date.now()}_${agentIndex}`,
+        transactionCode: agentTx.transactionCode,
+        agentData: agentTx,
+        merchantData: merchantMatch,
+        status,
+        difference: diff,
+        processedAt: new Date().toISOString(),
+        errorDetail,
+        errorType,
+        merchantCode: merchantMatch?.merchantCode || 'N/A',
+        merchantId: matchedMerchant?.id,
+        agentId: agentTx.agentId,
+        paymentMethod: merchantMatch?.method || PaymentMethod.QR_VNPAY,
+        transactionDate: merchantMatch?.timestamp || agentTx.timestamp,
+        merchantAmount: merchantMatch?.amount || 0,
+        agentAmount: agentTx.amount,
+        sourceFile: (merchantMatch as any)?.sourceFile || 'Unknown',
+        pointOfSaleName: merchantMatch?.pointOfSaleName || agentTx.pointOfSaleName,
+      };
+
+      results.push(completeRecord);
+      processedAgentCodes.add(code);
+    });
+
+    // Step 4: Find MISSING_IN_AGENT
+    merchantTransactions.forEach((merTx, merchIndex) => {
+      if (!processedAgentCodes.has(merTx.transactionCode)) {
+        const matchedMerchant = merchants.find(m => 
+          m.pointOfSaleName === merTx.pointOfSaleName ||
+          m.pointOfSaleCode === merTx.pointOfSaleCode
+        );
+        
+        const missingRecord: ReconciliationRecord = {
+          id: `REC_MISSING_${Date.now()}_${merchIndex}`,
+          transactionCode: merTx.transactionCode,
+          merchantData: merTx,
+          agentData: undefined,
+          status: TransactionStatus.MISSING_IN_AGENT,
+          difference: 0,
+          processedAt: new Date().toISOString(),
+          errorDetail: `Giao dịch ${merTx.transactionCode} từ hệ thống chưa có Agent nào up bill`,
+          merchantCode: merTx.merchantCode,
+          merchantId: matchedMerchant?.id,
+          agentId: 'N/A',
+          paymentMethod: merTx.method,
+          transactionDate: merTx.timestamp,
+          merchantAmount: merTx.amount,
+          agentAmount: 0,
+          sourceFile: (merTx as any)?.sourceFile || 'Unknown',
+          pointOfSaleName: merTx.pointOfSaleName,
+        };
+        
+        results.push(missingRecord);
+      }
+    });
+
+    return results;
+  };
+
+  // Handler for user click in PendingBillsPanel
+  const handleUserClick = (userId: string, userName: string) => {
+    setSelectedUserId(userId);
+    setSelectedUserName(userName);
+    setShowUserBillsModal(true);
   };
 
   const handleProcess = async () => {
     setIsLoading(true);
 
     try {
-      // Validate input data first to avoid empty processing
-      if (merchantData.length === 0 || agentData.length === 0) {
-        alert('Vui lòng tải lên cả hai file và đảm bảo có dữ liệu hợp lệ.');
+      // NEW FLOW: Load pending user_bills instead of session records
+      // Get all pending user_bills (optionally filtered by date/agent)
+      const billsSnapshot = await get(ref(database, 'user_bills'));
+      const allBills = FirebaseUtils.objectToArray<UserBill>(billsSnapshot.val() || {});
+      
+      // Debug: Log all bills and their statuses
+      console.log(`📊 Total bills loaded: ${allBills.length}`);
+      console.log(`📊 Bills status breakdown:`, {
+        PENDING: allBills.filter(b => b.status === 'PENDING').length,
+        DONE: allBills.filter(b => b.status === 'DONE').length,
+        MATCHED: allBills.filter(b => b.status === 'MATCHED').length,
+        other: allBills.filter(b => b.status !== 'PENDING' && b.status !== 'DONE' && b.status !== 'MATCHED').length
+      });
+      
+      // Check for case-insensitive and different status values
+      const pendingBills = allBills.filter(bill => {
+        const status = String(bill.status || '').toUpperCase();
+        return status === 'PENDING';
+      });
+      
+      console.log(`📊 Pending bills found: ${pendingBills.length}`);
+      if (pendingBills.length > 0) {
+        console.log(`📊 Sample pending bill:`, {
+          id: pendingBills[0].id,
+          userId: pendingBills[0].userId,
+          status: pendingBills[0].status,
+          transactionCode: pendingBills[0].transactionCode
+        });
+      }
+      
+      if (pendingBills.length === 0) {
+        // Show more detailed error message
+        const statusCounts = {
+          PENDING: allBills.filter(b => String(b.status || '').toUpperCase() === 'PENDING').length,
+          DONE: allBills.filter(b => String(b.status || '').toUpperCase() === 'DONE').length,
+          MATCHED: allBills.filter(b => String(b.status || '').toUpperCase() === 'MATCHED').length,
+          other: allBills.filter(b => {
+            const s = String(b.status || '').toUpperCase();
+            return s !== 'PENDING' && s !== 'DONE' && s !== 'MATCHED';
+          }).length
+        };
+        console.error('❌ No pending bills found. Status breakdown:', statusCounts);
+        alert(`Không có bills đang chờ đối soát.\n\nTổng số bills: ${allBills.length}\nPENDING: ${statusCounts.PENDING}\nDONE: ${statusCounts.DONE}\nMATCHED: ${statusCounts.MATCHED}\nKhác: ${statusCounts.other}`);
         setIsLoading(false);
         return;
       }
 
-      // Tạo session trước (có thể fail nếu Firebase chưa cấu hình)
-      let sessionId: string | null = null;
-      try {
-        sessionId = await ReconciliationService.createSession({
-          createdBy: 'current_user', // TODO: Get from auth context
-          createdAt: new Date().toISOString(),
-          status: 'PROCESSING' as const,
-          merchantFileName: merchantFiles.length > 0 ? `${merchantFiles.length} merchant files: ${merchantFiles.map(f => f.name).join(', ')}` : 'Unknown',
-          agentFileName: agentFiles.length > 0 ? `${agentFiles.length} agent files: ${agentFiles.map(f => f.name).join(', ')}` : 'Unknown',
-          totalRecords: merchantData.length + agentData.length,
-          matchedCount: 0,
-          errorCount: 0,
-          totalAmount: 0
-        });
-        setCurrentSessionId(sessionId);
-      } catch (e) {
-        console.warn('⚠️ Không thể tạo session trên Firebase. Sẽ xử lý local.', e);
-        sessionId = null; // continue locally
-        setCurrentSessionId(null);
-      }
-
-      // Load paid transactions to check for double payment
-      let paidTransactionCodes = new Set<string>();
-      // Load existing transaction codes from previous sessions (for supplementary bills check)
-      let existingTransactionCodes = new Map<string, { sessionId: string; processedAt: string }>();
-      
-      try {
-        // Load all reconciliation records to check which transactionCodes are already paid
-        const recordsSnapshot = await get(ref(database, 'reconciliation_records'));
-        const allRecords = FirebaseUtils.objectToArray(recordsSnapshot.val() || {}) as ReconciliationRecord[];
-        
-        // Load payments
-        const paymentsSnapshot = await get(ref(database, 'payments'));
-        const payments = FirebaseUtils.objectToArray(paymentsSnapshot.val() || {}) as Payment[];
-        
-        // Get set of paid record IDs
-        const paidRecordIds = new Set<string>();
-        payments.forEach(payment => {
-          if (payment.status === 'PAID' && payment.transactionIds) {
-            payment.transactionIds.forEach(id => paidRecordIds.add(id));
-          }
-        });
-        
-        // Get transaction codes from paid records
-        allRecords.forEach(record => {
-          if (paidRecordIds.has(record.id) && record.transactionCode) {
-            paidTransactionCodes.add(record.transactionCode);
-          }
-          
-          // Track all existing transaction codes for duplicate check (supplementary bills)
-          if (record.transactionCode && (record as any).sessionId) {
-            const existing = existingTransactionCodes.get(record.transactionCode);
-            if (!existing || new Date(record.processedAt) > new Date(existing.processedAt)) {
-              existingTransactionCodes.set(record.transactionCode, {
-                sessionId: (record as any).sessionId,
-                processedAt: record.processedAt
-              });
-            }
-          }
-        });
-        
-        // Also check aggregated data from sessions for faster lookup
-        const sessionsSnapshot = await get(ref(database, 'reconciliation_sessions'));
-        const allSessions = FirebaseUtils.objectToArray(sessionsSnapshot.val() || {}) as ReconciliationSession[];
-        allSessions.forEach(session => {
-          if (session.aggregatedData?.byTransactionCode) {
-            Object.entries(session.aggregatedData.byTransactionCode).forEach(([txCode, txData]) => {
-              const existing = existingTransactionCodes.get(txCode);
-              if (!existing || new Date(txData.lastProcessedAt) > new Date(existing.processedAt)) {
-                existingTransactionCodes.set(txCode, {
-                  sessionId: session.id,
-                  processedAt: txData.lastProcessedAt
-                });
-              }
-            });
-          }
-        });
-      } catch (e) {
-        console.warn('⚠️ Không thể load payments để check double payment. Tiếp tục...', e);
-      }
-
-      // OPTIMIZED MATCHING ALGORITHM - Index-based O(1) lookup
-      // CHỈ MATCH THEO MÃ CHUẨN CHI (transactionCode)
-      const results: ReconciliationRecord[] = [];
-      const processedAgentCodes = new Set<string>();
-      const agentDuplicateMap = new Map<string, AgentSubmission[]>();
-      
-      // Step 1: INDEX MERCHANT DATA (O(n) - chỉ làm 1 lần)
-      const merchantIndex = new Map<string, MerchantTransaction>();
-      merchantData.forEach(m => {
-        merchantIndex.set(m.transactionCode, m); // Match by transactionCode only
-      });
-      
-      // Step 2: Detect duplicates in Agent data with cross-agent tracking (O(m))
-      agentData.forEach((agentTx) => {
-        if (!agentDuplicateMap.has(agentTx.transactionCode)) {
-          agentDuplicateMap.set(agentTx.transactionCode, []);
-        }
-        agentDuplicateMap.get(agentTx.transactionCode)!.push(agentTx);
-      });
-
-      // Check for cross-agent duplicates (same bill claimed by different agents)
-      const crossAgentDuplicates = Array.from(agentDuplicateMap.entries())
-        .filter(([_, submissions]) => {
-          const uniqueAgents = new Set(submissions.map(s => s.agentId));
-          return submissions.length > 1 && uniqueAgents.size > 1; // Multiple agents claiming same bill
-        });
-
-      // Step 3: FAST MATCHING với early exit (O(m) với O(1) lookup per tx)
-      agentData.forEach((agentTx, agentIndex) => {
-        const code = agentTx.transactionCode; // Mã Chuẩn chi
-        const merchantMatch = merchantIndex.get(code); // O(1) lookup - chỉ match theo transactionCode
-        const duplicateCount = agentDuplicateMap.get(code)?.length || 1;
-        const isFirstOccurrence = !processedAgentCodes.has(code);
-        
-        // Check for cross-session duplicate (supplementary bills)
-        const existingTx = existingTransactionCodes.get(code);
-        const isSupplementaryDuplicate = existingTx && existingTx.sessionId !== sessionId;
-        
-        // Match Agent via point of sale
-        let matchedAgent: Agent | null = null;
-        if (agentTx.pointOfSaleName) {
-          matchedAgent = agents.find(a => 
-            a.assignedPointOfSales?.some(pos => 
-              normalize(pos) === normalize(agentTx.pointOfSaleName || '')
-            )
-          ) || null;
-          
-          if (matchedAgent && agentTx.agentId !== matchedAgent.id && agentTx.agentId !== matchedAgent.code) {
-            // Update agentId if matched via point of sale
-            agentTx.agentId = matchedAgent.id;
-            console.log(`✅ Matched agent: ${matchedAgent.name} (${matchedAgent.code}) via point of sale: ${agentTx.pointOfSaleName}`);
-          }
-        }
-        
-        // Check for double payment
-        const isPaid = paidTransactionCodes.has(code);
-        
-        let status: TransactionStatus;
-        let diff = 0;
-        let errorDetail = '';
-
-        // Early exit checks - chỉ check khi cần
-        const isCrossAgentDuplicate = crossAgentDuplicates.some(([dupCode, _]) => dupCode === code);
-        const agentSubmissions = agentDuplicateMap.get(code) || [];
-        const uniqueAgents = new Set(agentSubmissions.map(s => s.agentId));
-        
-        let errorType: ReconciliationRecord['errorType'] = undefined;
-        
-        // Check 0: Already paid (skip if already paid)
-        if (isPaid) {
-          status = TransactionStatus.MATCHED; // Keep as MATCHED but mark as paid
-          errorDetail = '';
-          diff = 0;
-        }
-        // Check 0.5: Cross-session duplicate (supplementary bill đã được xử lý)
-        else if (isSupplementaryDuplicate && isFirstOccurrence) {
-          status = TransactionStatus.ERROR_DUPLICATE;
-          errorType = 'DUPLICATE';
-          errorDetail = `⚠️ Bill ${code} đã được xử lý trong session trước (${existingTx.sessionId}). Đây là bill bổ sung/quên.`;
-          diff = 0;
-        }
-        // Check 1: Duplicate (early exit)
-        else if (isCrossAgentDuplicate && isFirstOccurrence) {
-          status = TransactionStatus.ERROR_DUPLICATE;
-          errorType = 'DUPLICATE';
-          errorDetail = `🚨 CROSS-AGENT DUPLICATE: Bill ${code} được claim bởi ${uniqueAgents.size} đại lý khác nhau: ${Array.from(uniqueAgents).join(', ')}`;
-          diff = 0;
-        } else if (duplicateCount > 1 && !isCrossAgentDuplicate && isFirstOccurrence) {
-          status = TransactionStatus.ERROR_DUPLICATE;
-          errorType = 'DUPLICATE';
-          errorDetail = `Bill ${code} bị trùng ${duplicateCount} lần bởi cùng đại lý ${agentTx.agentId}`;
-          diff = 0;
-        } else if (duplicateCount > 1 && !isFirstOccurrence) {
-          // Skip subsequent duplicates
-          return;
-        } 
-        // Check 2: Missing in Merchant (early exit - không check amount nếu không có match)
-        else if (!merchantMatch) {
-          status = TransactionStatus.MISSING_IN_MERCHANT;
-          errorType = 'MISSING_MERCHANT';
-          errorDetail = `Bill ${code} không tồn tại trong hệ thống Merchant`;
-          diff = 0; // Không tính chênh lệch khi không khớp mã chuẩn chi
-        } 
-        // Check 3: Point of sale mismatch (nếu có merchantMatch)
-        else if (merchantMatch && agentTx.pointOfSaleName && merchantMatch.pointOfSaleName) {
-          const normalizedAgentPOS = normalize(agentTx.pointOfSaleName);
-          const normalizedMerchantPOS = normalize(merchantMatch.pointOfSaleName);
-          if (normalizedAgentPOS !== normalizedMerchantPOS) {
-            status = TransactionStatus.ERROR_AMOUNT; // Dùng ERROR_AMOUNT tạm thời, có thể tạo status mới
-            errorType = 'WRONG_POINT_OF_SALE';
-            errorDetail = `Sai điểm bán: Agent "${agentTx.pointOfSaleName}" vs Merchant "${merchantMatch.pointOfSaleName}"`;
-            diff = 0;
-          }
-          // Check 4: Amount mismatch (chỉ check nếu point of sale đã khớp)
-          else if (Math.abs(merchantMatch.amount - agentTx.amount) > 0.01) {
-            status = TransactionStatus.ERROR_AMOUNT;
-            errorType = 'WRONG_AMOUNT';
-            errorDetail = `Sai số tiền: Merchant ${merchantMatch.amount.toLocaleString('vi-VN')}đ vs Agent ${agentTx.amount.toLocaleString('vi-VN')}đ`;
-            diff = agentTx.amount - merchantMatch.amount;
-          }
-          // Check 5: Agent mismatch (nếu có merchantMatch và pointOfSaleName khớp)
-          else if (matchedAgent && agentTx.agentId && matchedAgent.id !== agentTx.agentId && matchedAgent.code !== agentTx.agentId) {
-            status = TransactionStatus.ERROR_DUPLICATE; // Dùng tạm thời
-            errorType = 'WRONG_AGENT';
-            const agentName = agents.find(a => a.id === agentTx.agentId || a.code === agentTx.agentId)?.name || agentTx.agentId;
-            errorDetail = `Sai đại lý: Bill được claim bởi "${agentName}" nhưng điểm bán "${agentTx.pointOfSaleName}" thuộc về "${matchedAgent.name}"`;
-            diff = 0;
-          }
-          // All good - MATCHED
-          else {
-            status = TransactionStatus.MATCHED;
-            errorDetail = '';
-            diff = 0;
-          }
-        }
-        // Check 4: Amount mismatch (nếu không có point of sale check)
-        else if (Math.abs(merchantMatch.amount - agentTx.amount) > 0.01) {
-          status = TransactionStatus.ERROR_AMOUNT;
-          errorType = 'WRONG_AMOUNT';
-          errorDetail = `Sai số tiền: Merchant ${merchantMatch.amount.toLocaleString('vi-VN')}đ vs Agent ${agentTx.amount.toLocaleString('vi-VN')}đ`;
-          diff = agentTx.amount - merchantMatch.amount;
-        }
-        // All good - MATCHED
-        else {
-          status = TransactionStatus.MATCHED;
-          errorDetail = '';
-          diff = 0;
-        }
-
-        // Find merchant by point of sale ONLY (không check merchantCode)
-        const matchedMerchant = merchants.find(m => 
-          m.pointOfSaleName === merchantMatch?.pointOfSaleName ||
-          m.pointOfSaleCode === merchantMatch?.pointOfSaleCode
-        );
-
-        // Tạo Complete Transaction Record với đầy đủ thông tin
-        const completeRecord: ReconciliationRecord = {
-          id: `REC_${Date.now()}_${agentIndex}`,
-          transactionCode: agentTx.transactionCode,
-          agentData: agentTx,
-          merchantData: merchantMatch,
-          status,
-          difference: diff,
-          processedAt: new Date().toISOString(),
-          // Enhanced fields for complete record
-          errorDetail,
-          errorType,
-          merchantCode: merchantMatch?.merchantCode || 'N/A',
-          merchantId: matchedMerchant?.id,
-          agentId: agentTx.agentId,
-          paymentMethod: merchantMatch?.method || PaymentMethod.QR_VNPAY,
-          transactionDate: merchantMatch?.timestamp || agentTx.timestamp,
-          merchantAmount: merchantMatch?.amount || 0,
-          agentAmount: agentTx.amount,
-          sourceFile: (merchantMatch as any)?.sourceFile || 'Unknown',
-          pointOfSaleName: merchantMatch?.pointOfSaleName || agentTx.pointOfSaleName,
-          isPaid,
-        };
-
-        results.push(completeRecord);
-        processedAgentCodes.add(code);
-      });
-
-      // Step 4: Find MISSING_IN_AGENT (O(n) - chỉ loop merchant 1 lần)
-      merchantData.forEach((merTx, merchIndex) => {
-        if (!processedAgentCodes.has(merTx.transactionCode)) {
-          // Find merchant by point of sale ONLY (không check merchantCode)
-          const matchedMerchant = merchants.find(m => 
-            m.pointOfSaleName === merTx.pointOfSaleName ||
-            m.pointOfSaleCode === merTx.pointOfSaleCode
-          );
-          
-          const missingRecord: ReconciliationRecord = {
-            id: `REC_MISSING_${Date.now()}_${merchIndex}`,
-            transactionCode: merTx.transactionCode,
-            merchantData: merTx,
-            agentData: undefined,
-            status: TransactionStatus.MISSING_IN_AGENT,
-            difference: 0, // Không tính chênh lệch khi không khớp mã chuẩn chi
-            processedAt: new Date().toISOString(),
-            // Enhanced fields
-            errorDetail: `Giao dịch ${merTx.transactionCode} từ hệ thống chưa có Agent nào up bill`,
-            merchantCode: merTx.merchantCode,
-            merchantId: matchedMerchant?.id,
-            agentId: 'N/A',
-            paymentMethod: merTx.method,
-            transactionDate: merTx.timestamp,
-            merchantAmount: merTx.amount,
-            agentAmount: 0,
-            sourceFile: (merTx as any)?.sourceFile || 'Unknown',
-            pointOfSaleName: merTx.pointOfSaleName,
-          };
-          
-          results.push(missingRecord);
-        }
-      });
-
-      // Lưu records vào Firebase (nếu tạo được session)
-      if (sessionId) {
-        try {
-          await ReconciliationService.saveRecords(sessionId, results);
-        } catch (e) {
-          console.warn('⚠️ Không thể lưu records lên Firebase. Vẫn tiếp tục hiển thị kết quả.', e);
-        }
-      }
-
-      // Tự động tạo Payouts cho các giao dịch MATCHED và chưa thanh toán
-      const matchedUnpaidRecords = results.filter(r => 
-        r.status === TransactionStatus.MATCHED && 
-        !r.isPaid && 
-        r.agentId && 
-        r.agentId !== 'N/A' &&
-        r.merchantAmount && 
-        r.merchantAmount > 0
-      );
-
-      if (matchedUnpaidRecords.length > 0) {
-        try {
-          // Group by agent
-          const agentGroups = new Map<string, ReconciliationRecord[]>();
-          matchedUnpaidRecords.forEach(record => {
-            const agentId = record.agentId!;
-            if (!agentGroups.has(agentId)) {
-              agentGroups.set(agentId, []);
-            }
-            agentGroups.get(agentId)!.push(record);
-          });
-
-          // Create payment for each agent
-          for (const [agentId, records] of agentGroups.entries()) {
-            const agent = agents.find(a => a.id === agentId || a.code === agentId);
-            if (!agent) {
-              console.warn(`⚠️ Không tìm thấy agent ${agentId} để tạo payment`);
-              continue;
-            }
-
-            // Calculate totals
-            let totalAmount = 0;
-            let totalFee = 0;
-            const transactionIds: string[] = [];
-
-            records.forEach(record => {
-              const amount = record.merchantAmount || 0;
-              totalAmount += amount;
-              transactionIds.push(record.id);
-
-              // Calculate fee based on agent's discount rates by point of sale (NEW WORKFLOW)
-              const paymentMethod = record.paymentMethod || record.merchantData?.method || PaymentMethod.QR_VNPAY;
-              const pointOfSaleName = record.pointOfSaleName;
-              
-              let feePercentage = 0;
-              // Ưu tiên dùng discountRatesByPointOfSale nếu có
-              if (agent.discountRatesByPointOfSale && pointOfSaleName && agent.discountRatesByPointOfSale[pointOfSaleName]) {
-                feePercentage = agent.discountRatesByPointOfSale[pointOfSaleName][paymentMethod] || 0;
-              } else if (agent.discountRates) {
-                // Fallback về discountRates global (cũ)
-                feePercentage = agent.discountRates[paymentMethod] || 0;
-              }
-              
-              const fee = (amount * feePercentage) / 100;
-              totalFee += fee;
-            });
-
-            const netAmount = totalAmount - totalFee;
-
-            // Check if payment already exists for these transactions
-            let existingPaymentId: string | null = null;
-            try {
-              const paymentsSnapshot = await get(ref(database, 'payments'));
-              const allPayments = FirebaseUtils.objectToArray(paymentsSnapshot.val() || {}) as Payment[];
-              const existingPayment = allPayments.find(p => 
-                p.agentId === agentId && 
-                p.status !== 'CANCELLED' &&
-                transactionIds.some(txId => p.transactionIds?.includes(txId))
-              );
-              if (existingPayment) {
-                existingPaymentId = existingPayment.id;
-                console.log(`ℹ️ Payment đã tồn tại cho agent ${agentId}: ${existingPaymentId}`);
-              }
-            } catch (e) {
-              console.warn('⚠️ Không thể check existing payments', e);
-            }
-
-            // Create payment if not exists
-            if (!existingPaymentId) {
-              try {
-                const paymentId = await PaymentsService.createPayment({
-                  agentId,
-                  agentName: agent.name,
-                  agentCode: agent.code,
-                  bankAccount: agent.bankAccount,
-                  totalAmount,
-                  feeAmount: totalFee,
-                  netAmount,
-                  transactionIds,
-                  transactionCount: records.length,
-                  status: 'PENDING',
-                  createdAt: new Date().toISOString(),
-                  createdBy: 'system' // Auto-created by system
-                });
-
-                // Update records with paymentId
-                records.forEach(record => {
-                  record.paymentId = paymentId;
-                });
-
-                console.log(`✅ Đã tạo payment ${paymentId} cho agent ${agent.name}: ${netAmount.toLocaleString('vi-VN')}đ`);
-              } catch (e) {
-                console.error(`❌ Lỗi khi tạo payment cho agent ${agentId}:`, e);
-              }
-            } else {
-              // Update records with existing paymentId
-              records.forEach(record => {
-                record.paymentId = existingPaymentId!;
-                record.isPaid = false; // Still pending
-              });
-            }
-          }
-        } catch (e) {
-          console.error('❌ Lỗi khi tự động tạo payouts:', e);
-        }
-      }
-
-      // Calculate stats (O(1) - chỉ loop results 1 lần duy nhất)
-      const matched = results.filter(r => r.status === TransactionStatus.MATCHED).length;
-      // Error count: chỉ đếm các lỗi thực sự (ERROR_AMOUNT, ERROR_DUPLICATE), không đếm MISSING_IN_*
-      const errors = results.filter(r => 
-        r.status === TransactionStatus.ERROR_AMOUNT || 
-        r.status === TransactionStatus.ERROR_DUPLICATE
-      ).length;
-      const totalVol = results.reduce((acc, r) => acc + (r.merchantData?.amount || 0), 0);
-      
-      // Calculate session summary for optimized queries
-      const summary = {
-        byAgent: {} as Record<string, { count: number; amount: number }>,
-        byMerchant: {} as Record<string, { count: number; amount: number }>
-      };
-      
-      // Aggregated data for supplementary bills và export
-      const aggregatedData = {
-        byTransactionCode: {} as Record<string, {
-          transactionCode: string;
-          pointOfSaleName?: string;
-          agentId?: string;
-          merchantAmount: number;
-          agentAmount: number;
-          status: TransactionStatus;
-          lastProcessedAt: string;
-          sessionIds: string[];
-        }>,
-        byPointOfSale: {} as Record<string, {
-          pointOfSaleName: string;
-          totalTransactions: number;
-          totalAmount: number;
-          matchedCount: number;
-          errorCount: number;
-        }>,
-        byAgent: {} as Record<string, {
-          agentId: string;
-          totalTransactions: number;
-          totalAmount: number;
-          matchedCount: number;
-          errorCount: number;
-        }>
-      };
-      
-      console.log(`📊 Bắt đầu tính aggregatedData cho ${results.length} records`);
-      
-      results.forEach(record => {
-        const agentId = record.agentData?.agentId;
-        const merchantCode = record.merchantData?.merchantCode;
-        const amount = record.merchantData?.amount || 0;
-        const transactionCode = record.transactionCode;
-        const pointOfSaleName = record.pointOfSaleName;
-        
-        // Debug log cho record đầu tiên
-        if (results.indexOf(record) === 0) {
-          console.log('📝 Sample record:', {
-            transactionCode,
-            pointOfSaleName,
-            agentId,
-            amount,
-            status: record.status
-          });
-        }
-        
-        // Summary for optimized queries
-        if (agentId) {
-          if (!summary.byAgent[agentId]) {
-            summary.byAgent[agentId] = { count: 0, amount: 0 };
-          }
-          summary.byAgent[agentId].count++;
-          summary.byAgent[agentId].amount += amount;
-        }
-        
-        if (merchantCode) {
-          if (!summary.byMerchant[merchantCode]) {
-            summary.byMerchant[merchantCode] = { count: 0, amount: 0 };
-          }
-          summary.byMerchant[merchantCode].count++;
-          summary.byMerchant[merchantCode].amount += amount;
-        }
-        
-        // Aggregated data by transactionCode (for supplementary bills)
-        if (!aggregatedData.byTransactionCode[transactionCode]) {
-          aggregatedData.byTransactionCode[transactionCode] = {
-            transactionCode,
-            pointOfSaleName,
-            agentId,
-            merchantAmount: record.merchantAmount || 0,
-            agentAmount: record.agentAmount || 0,
-            status: record.status,
-            lastProcessedAt: record.processedAt,
-            sessionIds: sessionId ? [sessionId] : []
-          };
-        } else {
-          // Update if this is a newer processing
-          const existing = aggregatedData.byTransactionCode[transactionCode];
-          if (new Date(record.processedAt) > new Date(existing.lastProcessedAt)) {
-            existing.merchantAmount = record.merchantAmount || 0;
-            existing.agentAmount = record.agentAmount || 0;
-            existing.status = record.status;
-            existing.lastProcessedAt = record.processedAt;
-          }
-          if (sessionId && !existing.sessionIds.includes(sessionId)) {
-            existing.sessionIds.push(sessionId);
-          }
-        }
-        
-        // Aggregated data by point of sale
-        if (pointOfSaleName) {
-          if (!aggregatedData.byPointOfSale[pointOfSaleName]) {
-            aggregatedData.byPointOfSale[pointOfSaleName] = {
-              pointOfSaleName,
-              totalTransactions: 0,
-              totalAmount: 0,
-              matchedCount: 0,
-              errorCount: 0
+      // Validate: Must have merchant transactions (from current upload session or all)
+      let merchantTransactions: MerchantTransaction[] = [];
+      if (currentUploadSessionId) {
+        // Load merchant transactions from current upload session
+        merchantTransactions = await MerchantTransactionsService.getByUploadSession(currentUploadSessionId);
+      } else if (merchantData.length > 0) {
+        // Fallback: use in-memory merchantData (convert old format to new format if needed)
+        merchantTransactions = merchantData.map(item => {
+          // Check if it's old format (has timestamp) or new format (has transactionDate)
+          if ('timestamp' in item && !('transactionDate' in item)) {
+            // Old format - convert to new format
+            const transactionDate = item.timestamp.includes('T') 
+              ? item.timestamp 
+              : new Date(item.timestamp).toISOString();
+            return {
+              id: item.id,
+              merchantCode: item.merchantCode,
+              transactionCode: item.transactionCode,
+              amount: item.amount,
+              transactionDate,
+              uploadSessionId: currentUploadSessionId || '',
+              pointOfSaleName: item.pointOfSaleName,
+              rawRowIndex: undefined
             };
           }
-          const posData = aggregatedData.byPointOfSale[pointOfSaleName];
-          posData.totalTransactions++;
-          posData.totalAmount += amount;
-          if (record.status === TransactionStatus.MATCHED) {
-            posData.matchedCount++;
-          } else {
-            posData.errorCount++;
-          }
-        }
-        
-        // Aggregated data by agent
-        if (agentId) {
-          if (!aggregatedData.byAgent[agentId]) {
-            aggregatedData.byAgent[agentId] = {
-              agentId,
-              totalTransactions: 0,
-              totalAmount: 0,
-              matchedCount: 0,
-              errorCount: 0
-            };
-          }
-          const agentData = aggregatedData.byAgent[agentId];
-          agentData.totalTransactions++;
-          agentData.totalAmount += amount;
-          if (record.status === TransactionStatus.MATCHED) {
-            agentData.matchedCount++;
-          } else {
-            agentData.errorCount++;
-          }
-        }
-      });
-      
-      console.log(`✅ Hoàn thành tính aggregatedData:`, {
-        byTransactionCode: Object.keys(aggregatedData.byTransactionCode).length,
-        byPointOfSale: Object.keys(aggregatedData.byPointOfSale).length,
-        byAgent: Object.keys(aggregatedData.byAgent).length,
-        sampleTransactionCodes: Object.keys(aggregatedData.byTransactionCode).slice(0, 3),
-        samplePointOfSales: Object.keys(aggregatedData.byPointOfSale).slice(0, 3),
-        sampleAgents: Object.keys(aggregatedData.byAgent).slice(0, 3)
-      });
-      
-      // Clean undefined values từ aggregatedData trước khi lưu Firebase
-      const cleanAggregatedData = (data: typeof aggregatedData) => {
-        const clean = JSON.parse(JSON.stringify(data, (key, value) => {
-          // Loại bỏ undefined, giữ null
-          if (value === undefined) return null;
-          return value;
-        }));
-        return clean;
-      };
-      
-      // Get primary agentId from summary (agent with most transactions)
-      const primaryAgentId = Object.entries(summary.byAgent)
-        .sort((a, b) => b[1].count - a[1].count)[0]?.[0];
-      
-      // Get merchantIds
-      const merchantIds = Object.keys(summary.byMerchant);
-
-      // Cập nhật session với kết quả cuối và summary metadata (nếu có sessionId)
-      if (sessionId) {
-        try {
-          // Đếm lại chính xác từ results
-          const actualMatched = results.filter(r => r.status === TransactionStatus.MATCHED).length;
-          const actualErrors = results.filter(r => 
-            r.status === TransactionStatus.ERROR_AMOUNT || 
-            r.status === TransactionStatus.ERROR_DUPLICATE
-          ).length;
-          
-          // Clean aggregatedData trước khi lưu (loại bỏ undefined)
-          const cleanedAggregatedData = cleanAggregatedData(aggregatedData);
-          
-          await ReconciliationService.updateSession(sessionId, {
-            matchedCount: actualMatched,
-            errorCount: actualErrors,
-            totalRecords: results.length,
-            totalAmount: totalVol,
-            status: 'COMPLETED',
-            agentId: primaryAgentId,
-            merchantIds: merchantIds,
-            summary: summary,
-            aggregatedData: cleanedAggregatedData
-          });
-          
-          console.log(`✅ Updated session ${sessionId}: ${actualMatched} matched, ${actualErrors} errors, ${results.length} total`);
-          console.log(`📊 Aggregated data:`, {
-            byTransactionCode: Object.keys(aggregatedData.byTransactionCode).length,
-            byPointOfSale: Object.keys(aggregatedData.byPointOfSale).length,
-            byAgent: Object.keys(aggregatedData.byAgent).length
-          });
-          
-          // Set currentSessionData ngay với aggregatedData vừa tính (không đợi Firebase)
-          // Load session hiện tại để lấy các field khác, nhưng dùng aggregatedData vừa tính
-          const currentSession = await ReconciliationService.getSessionById(sessionId);
-          if (currentSession) {
-            setCurrentSessionData({
-              ...currentSession,
-              aggregatedData: aggregatedData // Đảm bảo aggregatedData được set ngay
-            });
-            console.log('✅ Set currentSessionData with aggregatedData:', {
-              hasAggregatedData: !!aggregatedData,
-              byTransactionCode: Object.keys(aggregatedData.byTransactionCode).length,
-              byPointOfSale: Object.keys(aggregatedData.byPointOfSale).length,
-              byAgent: Object.keys(aggregatedData.byAgent).length
-            });
-          } else {
-            // Nếu không load được session, vẫn set aggregatedData vào state hiện tại
-            setCurrentSessionData(prev => prev ? {
-              ...prev,
-              aggregatedData: aggregatedData
-            } : null);
-          }
-        } catch (e) {
-          console.warn('⚠️ Không thể cập nhật session trên Firebase.', e);
-          // Vẫn set aggregatedData vào state ngay cả khi lỗi
-          if (currentSessionData) {
-            setCurrentSessionData({
-              ...currentSessionData,
-              aggregatedData: aggregatedData
-            });
-          }
-        }
+          // Already new format
+          return item;
+        });
       } else {
-        // Nếu không có sessionId, vẫn set aggregatedData vào state để hiển thị
-        if (currentSessionData) {
-          setCurrentSessionData({
-            ...currentSessionData,
-            aggregatedData: aggregatedData
-          });
-          console.log('✅ Set aggregatedData vào currentSessionData (không có sessionId)');
-        } else {
-          // Nếu chưa có currentSessionData, tạo một session tạm để hiển thị
-          console.log('⚠️ Chưa có currentSessionData, tạo session tạm để hiển thị aggregatedData');
-          setCurrentSessionData({
-            id: 'temp',
-            createdAt: new Date().toISOString(),
-            status: 'COMPLETED',
-            aggregatedData: aggregatedData
-          } as ReconciliationSession);
-        }
+        alert('Vui lòng tải lên file merchants và đảm bảo có dữ liệu hợp lệ.');
+        setIsLoading(false);
+        return;
       }
 
-      setRecords(results);
+      if (merchantTransactions.length === 0) {
+        alert('Không có dữ liệu merchant transactions để đối soát.');
+        setIsLoading(false);
+        return;
+      }
+
+      console.log(`📊 Reconciling ${merchantTransactions.length} merchant transactions against ${pendingBills.length} pending bills`);
+
+      // Create reconciliation session ID
+      const reconciliationSessionId = `RECON_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       
-      // Debug: Log để kiểm tra aggregatedData có được set không
-      console.log('🔍 Final check - aggregatedData đã được tính:', {
-        aggregatedDataCounts: {
-          byTransactionCode: Object.keys(aggregatedData.byTransactionCode).length,
-          byPointOfSale: Object.keys(aggregatedData.byPointOfSale).length,
-          byAgent: Object.keys(aggregatedData.byAgent).length
+      // Create index of merchant transactions by transactionCode
+      const merchantIndex = new Map<string, MerchantTransaction[]>();
+      merchantTransactions.forEach(mt => {
+        if (!merchantIndex.has(mt.transactionCode)) {
+          merchantIndex.set(mt.transactionCode, []);
         }
+        merchantIndex.get(mt.transactionCode)!.push(mt);
+      });
+
+      // Process each pending bill and create report_records
+      const reportRecords: Array<Omit<ReportRecord, 'id' | 'createdAt'>> = [];
+      const now = new Date().toISOString();
+      
+      for (const bill of pendingBills) {
+        const matchingMerchants = merchantIndex.get(bill.transactionCode) || [];
+        let status: ReportStatus;
+        let errorMessage: string | undefined;
+        let merchantTransactionId: string | undefined;
+        let merchantCode: string | undefined;
+        let merchantAmount: number | undefined;
+        
+        if (matchingMerchants.length === 0) {
+          // No matching merchant transaction
+          status = 'UNMATCHED';
+          errorMessage = 'No matching merchant transaction';
+        } else {
+          // Filter by pointOfSaleName if bill has it
+          let filteredMerchants = matchingMerchants;
+          if (bill.pointOfSaleName) {
+            filteredMerchants = matchingMerchants.filter(mt => 
+              mt.pointOfSaleName && 
+              (mt.pointOfSaleName === bill.pointOfSaleName || 
+               normalize(mt.pointOfSaleName) === normalize(bill.pointOfSaleName))
+            );
+          }
+          
+          if (filteredMerchants.length === 0) {
+            // Point of sale mismatch
+            status = 'ERROR';
+            errorMessage = 'Point of sale mismatch';
+          } else if (filteredMerchants.length > 1) {
+            // Duplicate merchant transactions (same code + same point of sale)
+            status = 'ERROR';
+            errorMessage = 'Duplicate merchant transaction code';
+          } else {
+            // Exactly one match - check amountBeforeDiscount (số tiền trước KM)
+            const merchant = filteredMerchants[0];
+            const merchantAmountToCheck = merchant.amountBeforeDiscount || merchant.amount;
+            const billAmountToCheck = bill.amount; // UserBill amount is already the transaction amount
+            
+            if (Math.abs(merchantAmountToCheck - billAmountToCheck) > 0.01) {
+              // Amount mismatch
+              status = 'ERROR';
+              errorMessage = 'Amount mismatch';
+            } else {
+              // Perfect match - all 3 conditions met: transactionCode, pointOfSaleName, amountBeforeDiscount
+              status = 'MATCHED';
+              merchantTransactionId = merchant.id;
+              merchantCode = merchant.merchantCode;
+              merchantAmount = merchant.amount; // Use amount (số tiền sau KM) for display
+            }
+          }
+        }
+        
+        // Get merchant transaction details if matched
+        const matchedMerchant = status === 'MATCHED' && merchantTransactionId 
+          ? merchantTransactions.find(mt => mt.id === merchantTransactionId)
+          : null;
+        
+        // Create report record - only include errorMessage if it has a value
+        const reportRecord: Omit<ReportRecord, 'id' | 'createdAt'> = {
+          // Thông tin từ Bill
+          userBillId: bill.id,
+          userId: bill.userId,
+          agentId: bill.agentId,
+          agentCode: bill.agentCode,
+          transactionCode: bill.transactionCode,
+          amount: bill.amount,
+          paymentMethod: bill.paymentMethod,
+          pointOfSaleName: bill.pointOfSaleName,
+          transactionDate: bill.timestamp || bill.createdAt,
+          userBillCreatedAt: bill.createdAt,
+          invoiceNumber: bill.invoiceNumber,
+          
+          // Thông tin từ Merchants (file Excel)
+          merchantTransactionId: merchantTransactionId || undefined,
+          merchantCode: merchantCode || undefined,
+          merchantAmount: merchantAmount || undefined,
+          merchantAmountBeforeDiscount: matchedMerchant?.amountBeforeDiscount || undefined,
+          merchantPointOfSaleName: matchedMerchant?.pointOfSaleName || undefined,
+          merchantPointOfSaleCode: matchedMerchant?.pointOfSaleCode || undefined,
+          merchantBranchName: matchedMerchant?.branchName || undefined,
+          merchantInvoiceNumber: matchedMerchant?.invoiceNumber || undefined,
+          merchantPhoneNumber: matchedMerchant?.phoneNumber || undefined,
+          merchantPromotionCode: matchedMerchant?.promotionCode || undefined,
+          merchantTransactionDate: matchedMerchant?.transactionDate || undefined,
+          
+          // Reconciliation result
+          status,
+          ...(errorMessage ? { errorMessage } : {}), // Only include errorMessage if it exists
+          reconciledAt: now,
+          reconciledBy: 'ADMIN',
+          reconciliationSessionId
+        };
+        
+        reportRecords.push(reportRecord);
+      }
+      
+      // Create all report records in batch
+      console.log(`💾 Creating ${reportRecords.length} report records...`);
+      await ReportService.createReportRecords(reportRecords);
+      console.log(`✅ Created ${reportRecords.length} report records`);
+      
+      // Update user_bills status to DONE
+      const updatePromises = pendingBills.map(bill => 
+        UserService.updateUserBill(bill.id, { status: 'DONE' as const })
+      );
+      await Promise.all(updatePromises);
+      console.log(`✅ Updated ${pendingBills.length} user_bills status to DONE`);
+      
+      // Calculate stats
+      const matched = reportRecords.filter(r => r.status === 'MATCHED').length;
+      const errors = reportRecords.filter(r => r.status === 'ERROR').length;
+      const unmatched = reportRecords.filter(r => r.status === 'UNMATCHED').length;
+      
+      // Show results
+      setAdminReconciliationResults({
+        matched,
+        errors: errors + unmatched,
+        results: reportRecords.map(r => ({
+          billId: r.userBillId,
+          status: r.status === 'MATCHED' ? 'MATCHED' : 'ERROR',
+          errorMessage: r.errorMessage
+        }))
       });
       
-      // Reload history để hiển thị session mới
-      await loadSessionHistory(1, true);
+      alert(`Đối soát hoàn tất!\n- Khớp: ${matched}\n- Lỗi: ${errors}\n- Chưa khớp: ${unmatched}`);
       
       setIsLoading(false);
-      setStep(3);
     } catch (error) {
-      console.error('Error processing reconciliation:', error);
-      alert('Có lỗi khi xử lý đối soát. Vui lòng thử lại.');
+      console.error('Error during reconciliation:', error);
+      alert('Có lỗi xảy ra khi đối soát. Vui lòng thử lại.');
       setIsLoading(false);
     }
   };
@@ -1727,16 +1269,18 @@ const ReconciliationModule: React.FC = () => {
 
   const resetProcess = () => {
     if (window.confirm('Bạn có chắc chắn muốn bắt đầu phiên đối soát mới? Tất cả dữ liệu hiện tại sẽ bị xóa.')) {
-      setStep(1);
+      setStep(0);
       setMerchantFiles([]);
-      setAgentFiles([]);
-      setAgentImages([]);
-      setAgentOcrResults([]);
       setMerchantData([]);
-      setAgentData([]);
       setRecords([]);
       setAiReport('');
       setCurrentSessionId(null);
+      setAdminReconciliationResults(null);
+      setCurrentUploadSessionId(null);
+      // Reset file input để có thể upload lại
+      if (merchantInputRef.current) {
+        merchantInputRef.current.value = '';
+      }
     }
   };
 
@@ -1772,19 +1316,7 @@ const ReconciliationModule: React.FC = () => {
         highlightTotalRow: false
       });
       
-      // Sheet thống kê
-      const statsHeaders = ['Thống kê', 'Giá trị'];
-      const statsData = [
-        { 'Thống kê': 'Tổng giao dịch', 'Giá trị': records.length },
-        { 'Thống kê': 'Đã khớp', 'Giá trị': records.filter(r => r.status === 'MATCHED').length },
-        { 'Thống kê': 'Lỗi', 'Giá trị': records.filter(r => r.status !== 'MATCHED').length },
-        { 'Thống kê': 'Tổng giá trị (VNĐ)', 'Giá trị': records.reduce((sum, r) => sum + (r.merchantData?.amount || 0), 0) }
-      ];
-      const statsNumberCols = identifyNumberColumns(statsHeaders);
-      createStyledSheet(workbook, 'Thống kê', statsHeaders, statsData, {
-        numberColumns: statsNumberCols.filter(i => i === 1), // Only 'Giá trị' column
-        highlightTotalRow: false
-      });
+      // Bỏ sheet thống kê (theo yêu cầu)
       
       // Add metadata
       addMetadataSheet(workbook, settings, {
@@ -1802,7 +1334,6 @@ const ReconciliationModule: React.FC = () => {
   };
 
   // State để hiển thị aggregated data
-  const [showAggregatedData, setShowAggregatedData] = useState(false);
   const [currentSessionData, setCurrentSessionData] = useState<ReconciliationSession | null>(null);
 
   // Load session cũ để xem lại
@@ -1947,7 +1478,7 @@ const ReconciliationModule: React.FC = () => {
           aggregatedData: aggregatedData // Đảm bảo aggregatedData được set
         });
         setRecords(sessionRecords);
-        setStep(3);
+        setStep(2); // Results step
         setShowHistory(false);
       }
     } catch (error) {
@@ -1965,7 +1496,7 @@ const ReconciliationModule: React.FC = () => {
       await loadSessionHistory(1, true); // Reload history from page 1
       if (currentSessionId === sessionId) {
         // Nếu đang xem session bị xóa, reset về step 1
-        setStep(1);
+        setStep(0);
         setCurrentSessionId(null);
         setRecords([]);
       }
@@ -1976,6 +1507,16 @@ const ReconciliationModule: React.FC = () => {
     }
   };
 
+  // Filter sessions by selected date
+  const filteredHistoryByDate = React.useMemo(() => {
+    if (!selectedHistoryDate) return sessionHistory;
+    const selectedDate = new Date(selectedHistoryDate).toISOString().split('T')[0];
+    return sessionHistory.filter(session => {
+      const sessionDate = new Date(session.createdAt).toISOString().split('T')[0];
+      return sessionDate === selectedDate;
+    });
+  }, [sessionHistory, selectedHistoryDate]);
+
   return (
     <div className="max-w-6xl mx-auto space-y-6">
       <div className="flex justify-between items-center">
@@ -1984,17 +1525,156 @@ const ReconciliationModule: React.FC = () => {
           <p className="text-slate-500">Quy trình tải lên Excel, ghép file và kiểm tra lỗi tự động.</p>
         </div>
         
-        <div className="flex items-center space-x-4">
-          {/* Nút lịch sử */}
+        {/* Tab Navigation */}
+        <div className="flex items-center space-x-2 bg-white rounded-lg border border-slate-200 p-1">
           <button
-            onClick={() => setShowHistory(!showHistory)}
-            className="flex items-center space-x-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors"
+            onClick={() => setActiveTab('reconciliation')}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              activeTab === 'reconciliation'
+                ? 'bg-indigo-600 text-white'
+                : 'text-slate-600 hover:bg-slate-100'
+            }`}
           >
-            <History className="w-4 h-4" />
-            <span>Lịch sử ({historyTotal > 0 ? historyTotal : sessionHistory.length})</span>
+            Đối soát
           </button>
+          <button
+            onClick={() => setActiveTab('history')}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              activeTab === 'history'
+                ? 'bg-indigo-600 text-white'
+                : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            Lịch sử đối soát
+          </button>
+        </div>
+      </div>
+
+      {/* Pending Bills Panel - Always visible in reconciliation tab */}
+      {activeTab === 'reconciliation' && (
+        <PendingBillsPanel onUserClick={handleUserClick} />
+      )}
+
+      {/* User Bills Modal */}
+      {selectedUserId && (
+        <UserBillsModal
+          userId={selectedUserId}
+          userName={selectedUserName}
+          isOpen={showUserBillsModal}
+          onClose={() => {
+            setShowUserBillsModal(false);
+            setSelectedUserId(null);
+            setSelectedUserName('');
+          }}
+        />
+      )}
+
+      {/* Tab Content: Lịch sử đối soát */}
+      {activeTab === 'history' && (
+        <div className="bg-white border border-slate-200 rounded-xl p-6">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-lg font-semibold text-slate-800">Lịch sử phiên đối soát</h3>
+            <div className="flex items-center space-x-4">
+              <label className="text-sm font-medium text-slate-700">Chọn ngày:</label>
+              <input
+                type="date"
+                value={selectedHistoryDate}
+                onChange={(e) => setSelectedHistoryDate(e.target.value)}
+                className="px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+              />
+            </div>
+          </div>
           
-          {/* Progress steps */}
+          <div className="space-y-3">
+            {loadingHistory ? (
+              <div className="text-center py-8 text-slate-400">Đang tải lịch sử...</div>
+            ) : filteredHistoryByDate.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-slate-200">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Session ID</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Ngày</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">File</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Số bill</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Khớp</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Lỗi</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Trạng thái</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-slate-200">
+                    {filteredHistoryByDate.map((session) => {
+                      const date = new Date(session.createdAt);
+                      const formattedDate = date.toLocaleDateString('vi-VN', {
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      });
+                      
+                      return (
+                        <tr key={session.id} className="hover:bg-slate-50">
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-slate-900">
+                            {session.id.substring(0, 8)}...
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                            {formattedDate}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                            <div className="flex items-center space-x-2">
+                              <FileText className="w-4 h-4" />
+                              <span>{session.merchantFileName}</span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">
+                            {session.totalRecords}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex items-center space-x-1">
+                              <CheckCircle className="w-4 h-4 text-green-600" />
+                              <span className="text-sm font-medium text-green-600">{session.matchedCount}</span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex items-center space-x-1">
+                              <AlertCircle className="w-4 h-4 text-red-600" />
+                              <span className="text-sm font-medium text-red-600">{session.errorCount}</span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            {session.status === 'COMPLETED' ? (
+                              <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">
+                                Hoàn thành
+                              </span>
+                            ) : (
+                              <span className="px-2 py-1 bg-red-100 text-red-800 rounded-full text-xs font-medium">
+                                Lỗi
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-center py-8 text-slate-400">
+                <History className="w-12 h-12 mx-auto mb-3 opacity-20" />
+                <p>Chưa có lịch sử đối soát cho ngày đã chọn</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Tab Content: Đối soát (workflow hiện tại) */}
+      {activeTab === 'reconciliation' && (
+        <>
+          {/* Progress steps - chỉ hiển thị khi ở tab Đối soát */}
+          {step > 0 && (
+            <div className="flex justify-end">
           <div className="flex space-x-2">
             <span className={`px-3 py-1 rounded-full text-sm font-semibold ${step >= 1 ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-500'}`}>1. Upload</span>
             <span className="text-slate-300">→</span>
@@ -2003,10 +1683,10 @@ const ReconciliationModule: React.FC = () => {
             <span className={`px-3 py-1 rounded-full text-sm font-semibold ${step >= 3 ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-500'}`}>3. Kết quả</span>
           </div>
         </div>
-      </div>
+          )}
 
-      {/* History Panel */}
-      {showHistory && (
+      {/* History Panel - Giữ lại để tương thích, nhưng ẩn khi ở tab history */}
+      {showHistory && activeTab === 'reconciliation' && (
         <div className="bg-white border border-slate-200 rounded-xl p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-slate-800">Lịch sử phiên đối soát</h3>
@@ -2122,7 +1802,8 @@ const ReconciliationModule: React.FC = () => {
         </div>
       )}
 
-      {step === 1 && (
+      {/* Step 0: Upload Merchant Files - Chỉ hiển thị khi ở tab Đối soát */}
+      {activeTab === 'reconciliation' && step === 0 && (
         <div className="space-y-6">
           <div className="flex justify-end">
             <button 
@@ -2133,7 +1814,7 @@ const ReconciliationModule: React.FC = () => {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 gap-6">
             {/* Multi Merchant Upload */}
             <div className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center transition-colors ${merchantFiles.length > 0 ? 'border-green-500 bg-green-50' : 'border-slate-300 hover:border-indigo-400 bg-white'}`}>
               <input 
@@ -2193,6 +1874,11 @@ const ReconciliationModule: React.FC = () => {
                         onClick={() => {
                           setMerchantFiles([]);
                           setMerchantData([]);
+                          setCurrentUploadSessionId(null);
+                          // Reset file input để có thể upload lại
+                          if (merchantInputRef.current) {
+                            merchantInputRef.current.value = '';
+                          }
                         }}
                         className="px-3 py-1 text-xs font-medium bg-white border border-red-200 rounded hover:bg-red-100 text-red-700"
                         disabled={isProcessingFiles}
@@ -2225,219 +1911,22 @@ const ReconciliationModule: React.FC = () => {
                 </>
               )}
             </div>
-
-            {/* Agent Images Upload (OCR) */}
-            <div className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center transition-colors ${agentFiles.length > 0 ? 'border-blue-500 bg-blue-50' : 'border-slate-300 hover:border-indigo-400 bg-white'}`}>
-              <input 
-                type="file" 
-                accept="image/*" 
-                ref={agentInputRef}
-                className="hidden"
-                multiple
-                onChange={handleAgentImagesUpload}
-              />
-              
-              {agentFiles.length > 0 ? (
-                <>
-                   <ImageIcon className="w-12 h-12 mb-4 text-blue-500" />
-                   <h3 className="text-lg font-semibold text-blue-700">
-                     {agentFiles.length} Ảnh Screenshot
-                   </h3>
-                   <p className="text-sm text-blue-600 mb-2">
-                     Đã OCR {agentData.length}/{agentFiles.length} ảnh thành công
-                   </p>
-                   
-                   {/* Image Preview Grid */}
-                   <div className="w-full max-h-64 overflow-y-auto mb-4">
-                     <div className="grid grid-cols-3 gap-3">
-                       {agentFiles.map((file, index) => {
-                         const ocrResult = agentOcrResults[index];
-                         const imageUrl = agentImages[index];
-                         
-                         return (
-                           <div key={index} className="relative border-2 rounded-lg overflow-hidden bg-white">
-                             {/* Image Preview */}
-                             {imageUrl && (
-                               <img 
-                                 src={imageUrl} 
-                                 alt={file.name}
-                                 className="w-full h-24 object-cover"
-                               />
-                             )}
-                             
-                             {/* OCR Status Badge */}
-                             <div className="absolute top-1 right-1">
-                               {ocrResult?.status === 'processing' && (
-                                 <div className="bg-yellow-500 text-white text-xs px-2 py-1 rounded-full flex items-center">
-                                   <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                                   Đang xử lý
-                                 </div>
-                               )}
-                               {ocrResult?.status === 'success' && (
-                                 <div className="bg-emerald-500 text-white text-xs px-2 py-1 rounded-full flex items-center">
-                                   <CheckCircle className="w-3 h-3 mr-1" />
-                                   Thành công
-                                 </div>
-                               )}
-                               {ocrResult?.status === 'error' && (
-                                 <div className="bg-red-500 text-white text-xs px-2 py-1 rounded-full flex items-center">
-                                   <XCircle className="w-3 h-3 mr-1" />
-                                   Lỗi
-                                 </div>
-                               )}
-                               {ocrResult?.status === 'pending' && (
-                                 <div className="bg-slate-400 text-white text-xs px-2 py-1 rounded-full">
-                                   Chờ xử lý
-                                 </div>
-                               )}
-                             </div>
-                             
-                             {/* File name and extracted data */}
-                             <div className="p-2 text-xs">
-                               <div className="font-medium truncate mb-1">{file.name}</div>
-                               {ocrResult?.result && (
-                                 <div className="mt-1 space-y-0.5 text-slate-600">
-                                   <div className="flex items-center justify-between">
-                                     <span className="text-slate-500">Mã GD:</span>
-                                     <span className="font-mono font-semibold text-slate-800" title={ocrResult.result.transactionCode}>
-                                       {ocrResult.result.transactionCode.length > 12 
-                                         ? `${ocrResult.result.transactionCode.substring(0, 12)}...`
-                                         : ocrResult.result.transactionCode}
-                                     </span>
-                                   </div>
-                                   <div className="flex items-center justify-between">
-                                     <span className="text-slate-500">Tiền:</span>
-                                     <span className="font-semibold text-emerald-700">
-                                       {ocrResult.result.amount.toLocaleString('vi-VN')}₫
-                                     </span>
-                                   </div>
-                                   {ocrResult.result.pointOfSaleName && (
-                                     <div className="flex items-center justify-between">
-                                       <span className="text-slate-500">Điểm bán:</span>
-                                       <span className="font-medium text-indigo-700 truncate max-w-[100px]" title={ocrResult.result.pointOfSaleName}>
-                                         {ocrResult.result.pointOfSaleName.length > 15
-                                           ? `${ocrResult.result.pointOfSaleName.substring(0, 15)}...`
-                                           : ocrResult.result.pointOfSaleName}
-                                       </span>
-                                     </div>
-                                   )}
-                                   {ocrResult.result.bankAccount && (
-                                     <div className="flex items-center justify-between">
-                                       <span className="text-slate-500">TK NH:</span>
-                                       <span className="font-mono text-blue-700" title={ocrResult.result.bankAccount}>
-                                         {ocrResult.result.bankAccount}
-                                       </span>
-                                     </div>
-                                   )}
-                                   {ocrResult.result.invoiceNumber && (
-                                     <div className="flex items-center justify-between">
-                                       <span className="text-slate-500">Hóa đơn:</span>
-                                       <span className="font-medium text-purple-700">
-                                         {ocrResult.result.invoiceNumber}
-                                       </span>
-                                     </div>
-                                   )}
-                                 </div>
-                               )}
-                               {ocrResult?.error && (
-                                 <div className="mt-1 text-red-600 text-xs truncate" title={ocrResult.error}>
-                                   {ocrResult.error}
-                                 </div>
-                               )}
-                               {ocrResult?.status === 'error' && (
-                                 <button
-                                   onClick={() => retryOcr(index)}
-                                   className="mt-1 text-xs text-blue-600 hover:underline"
-                                 >
-                                   Thử lại
-                                 </button>
-                               )}
-                             </div>
-                           </div>
-                         );
-                       })}
-                     </div>
-                   </div>
-
-                   {/* Progress bar when processing */}
-                   {isProcessingAgentFiles && (
-                     <div className="w-full mb-4">
-                       <div className="flex justify-between text-xs text-blue-600 mb-1">
-                         <span>Đang OCR ảnh...</span>
-                         <span>{agentMergeProgress}%</span>
-                       </div>
-                       <div className="w-full bg-blue-200 rounded-full h-2">
-                         <div 
-                           className="bg-blue-600 h-2 rounded-full transition-all duration-300" 
-                           style={{ width: `${agentMergeProgress}%` }}
-                         ></div>
-                       </div>
-                     </div>
-                   )}
-                   
-                   <div className="flex space-x-3">
-                      <button 
-                        onClick={() => agentInputRef.current?.click()}
-                        className="px-3 py-1 text-xs font-medium bg-white border border-blue-200 rounded hover:bg-blue-100 text-blue-700"
-                        disabled={isProcessingAgentFiles}
-                      >
-                        <Plus className="w-3 h-3 mr-1 inline" />
-                        Thêm ảnh
-                      </button>
-                      <button 
-                        onClick={() => {
-                          setAgentFiles([]);
-                          setAgentImages([]);
-                          setAgentOcrResults([]);
-                          setAgentData([]);
-                        }}
-                        className="px-3 py-1 text-xs font-medium bg-white border border-red-200 rounded hover:bg-red-100 text-red-700"
-                        disabled={isProcessingAgentFiles}
-                      >
-                        <Trash2 className="w-3 h-3 mr-1 inline" />
-                        Xóa tất cả
-                      </button>
-                   </div>
-                </>
-              ) : (
-                <>
-                  <ImageIcon className="w-12 h-12 mb-4 text-slate-400" />
-                  <h3 className="text-lg font-semibold text-slate-700">Ảnh Screenshot Đại lý</h3>
-                  <p className="text-sm text-slate-500 text-center mb-4">
-                    Upload ảnh chụp màn hình từ app VNPay<br />
-                    Hệ thống sẽ tự động OCR và extract thông tin
-                  </p>
-                  <div className="text-xs text-indigo-600 mb-6 text-center">
-                    📸 Upload nhiều ảnh cùng lúc<br />
-                    🤖 Tự động OCR với Gemini AI<br />
-                    ✅ Preview kết quả ngay
-                  </div>
-                  <button 
-                    onClick={() => agentInputRef.current?.click()}
-                    className="px-4 py-2 rounded-lg font-medium flex items-center bg-indigo-600 text-white hover:bg-indigo-700"
-                  >
-                    <Upload className="w-4 h-4 mr-2" /> 
-                    Chọn ảnh Screenshot
-                  </button>
-                </>
-              )}
-            </div>
           </div>
 
           <div className="flex justify-end mt-8">
             <button 
-              disabled={merchantFiles.length === 0 || agentFiles.length === 0 || isProcessingFiles || isProcessingAgentFiles}
-              onClick={() => setStep(2)}
-              className={`px-8 py-3 rounded-lg font-bold shadow-lg flex items-center transition-all ${(merchantFiles.length === 0 || agentFiles.length === 0 || isProcessingFiles || isProcessingAgentFiles) ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:scale-105'}`}
+              onClick={handleProcess}
+              disabled={isLoading || merchantData.length === 0 || isProcessingFiles}
+              className={`px-8 py-3 rounded-lg font-bold shadow-lg flex items-center transition-all ${(merchantData.length === 0 || isProcessingFiles) ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:scale-105'}`}
             >
-              {isProcessingFiles || isProcessingAgentFiles ? (
+              {isLoading || isProcessingFiles ? (
                 <>
-                  <RotateCcw className="w-4 h-4 mr-2 animate-spin" />
-                  Đang xử lý...
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  {isLoading ? 'Đang đối soát...' : 'Đang xử lý...'}
                 </>
               ) : (
                 <>
-                  Tiếp tục <Play className="w-4 h-4 ml-2 fill-current" />
+                  Bắt đầu Đối soát <Play className="w-4 h-4 ml-2 fill-current" />
                 </>
               )}
             </button>
@@ -2445,44 +1934,102 @@ const ReconciliationModule: React.FC = () => {
         </div>
       )}
 
-      {step === 2 && (
-        <div className="bg-white rounded-xl shadow-sm p-12 flex flex-col items-center justify-center min-h-[400px]">
-          {!isLoading ? (
-             <div className="text-center">
-               <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-4">
-                 <Play className="w-8 h-8 ml-1" />
-               </div>
-               <h3 className="text-xl font-bold text-slate-800 mb-2">Sẵn sàng xử lý dữ liệu</h3>
-               <p className="text-slate-500 mb-6 max-w-md mx-auto">
-                 Hệ thống sẽ đối chiếu <strong>{merchantData.length}</strong> giao dịch hệ thống với <strong>{agentData.length}</strong> bill đại lý.
-               </p>
-               <div className="flex gap-4 justify-center">
-                 <button 
-                  onClick={() => setStep(1)}
+
+      {/* Step 2: Results - Chỉ hiển thị khi ở tab Đối soát */}
+      {activeTab === 'reconciliation' && step === 2 && (
+        <div className="space-y-6">
+          {/* Admin Reconciliation Results (New System) */}
+          {adminReconciliationResults && (
+            <div className="bg-white rounded-xl border border-slate-200 p-6">
+              <h3 className="text-lg font-semibold text-slate-900 mb-4">Kết quả đối soát</h3>
+              
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                  <div className="flex items-center space-x-2">
+                    <CheckCircle className="w-5 h-5 text-green-600" />
+                    <div>
+                      <p className="text-sm text-green-700">Khớp</p>
+                      <p className="text-2xl font-bold text-green-900">{adminReconciliationResults.matched}</p>
+                                 </div>
+                                 </div>
+                             </div>
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                  <div className="flex items-center space-x-2">
+                    <AlertTriangle className="w-5 h-5 text-red-600" />
+                    <div>
+                      <p className="text-sm text-red-700">Lỗi</p>
+                      <p className="text-2xl font-bold text-red-900">{adminReconciliationResults.errors}</p>
+                                   </div>
+                                   </div>
+                                     </div>
+                                     </div>
+
+              {/* Results Table */}
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-slate-200">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Mã GD</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Số tiền</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Điểm thu</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Trạng thái</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-slate-200">
+                    {adminReconciliationResults.results.map((result) => {
+                      return (
+                        <tr key={result.billId}>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-slate-900">
+                            {result.billId}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">
+                            -
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                            -
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            {result.status === 'MATCHED' ? (
+                              <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">
+                                Khớp
+                                       </span>
+                            ) : (
+                              <div>
+                                <span className="px-2 py-1 bg-red-100 text-red-800 rounded-full text-xs font-medium">
+                                  Lỗi
+                                </span>
+                                {result.errorMessage && (
+                                  <p className="text-xs text-red-600 mt-1">{result.errorMessage}</p>
+                                   )}
+                                 </div>
+                               )}
+                          </td>
+                        </tr>
+                         );
+                       })}
+                  </tbody>
+                </table>
+                   </div>
+
+              <div className="mt-6 flex justify-end space-x-3">
+                      <button 
+                        onClick={() => {
+                    setStep(0);
+                    setSelectedAgentId(null);
+                    setMerchantFiles([]);
+                    setAdminReconciliationResults(null);
+                  }}
                   className="px-6 py-3 rounded-lg font-medium text-slate-600 hover:bg-slate-100"
                  >
-                   Quay lại
-                 </button>
-                 <button 
-                  onClick={handleProcess}
-                  className="bg-indigo-600 text-white px-8 py-3 rounded-lg font-bold shadow-lg hover:bg-indigo-700 transition-all transform hover:scale-105"
-                 >
-                   Bắt đầu Đối soát
+                  Đối soát mới
                  </button>
                </div>
-             </div>
-          ) : (
-            <div className="text-center">
-              <div className="animate-spin w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full mx-auto mb-6"></div>
-              <h3 className="text-xl font-semibold text-slate-700">Đang xử lý...</h3>
-              <p className="text-slate-500 mt-2">Đang quét và so khớp dữ liệu...</p>
-            </div>
-          )}
         </div>
       )}
 
-      {step === 3 && (
-        <div className="space-y-6">
+          {/* Legacy Results (Old System) */}
+          {!adminReconciliationResults && records.length > 0 && (
+            <>
           {/* Summary Banner */}
           <div className="bg-white rounded-xl p-6 shadow-sm border border-slate-100 grid grid-cols-2 md:grid-cols-4 gap-4">
              <div className="text-center border-r border-slate-100 last:border-0">
@@ -2504,51 +2051,6 @@ const ReconciliationModule: React.FC = () => {
                 </p>
              </div>
           </div>
-
-          {/* Error Type Breakdown - Hiển thị phân loại lỗi chi tiết */}
-          {records.filter(r => r.status !== TransactionStatus.MATCHED).length > 0 && (
-            <div className="bg-white rounded-xl p-6 shadow-sm border border-slate-100">
-              <h3 className="text-lg font-semibold text-slate-800 mb-4 flex items-center">
-                <AlertTriangle className="w-5 h-5 mr-2 text-amber-600" />
-                Phân loại lỗi chi tiết
-              </h3>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                <div className="text-center p-3 bg-red-50 rounded-lg border border-red-100">
-                  <p className="text-xs text-red-600 font-medium mb-1">Sai số tiền</p>
-                  <p className="text-xl font-bold text-red-700">
-                    {records.filter(r => r.errorType === 'WRONG_AMOUNT').length}
-                  </p>
-                </div>
-                <div className="text-center p-3 bg-purple-50 rounded-lg border border-purple-100">
-                  <p className="text-xs text-purple-600 font-medium mb-1">Sai điểm bán</p>
-                  <p className="text-xl font-bold text-purple-700">
-                    {records.filter(r => r.errorType === 'WRONG_POINT_OF_SALE').length}
-                  </p>
-                </div>
-                <div className="text-center p-3 bg-pink-50 rounded-lg border border-pink-100">
-                  <p className="text-xs text-pink-600 font-medium mb-1">Sai đại lý</p>
-                  <p className="text-xl font-bold text-pink-700">
-                    {records.filter(r => r.errorType === 'WRONG_AGENT').length}
-                  </p>
-                </div>
-                <div className="text-center p-3 bg-orange-50 rounded-lg border border-orange-100">
-                  <p className="text-xs text-orange-600 font-medium mb-1">Trùng lặp</p>
-                  <p className="text-xl font-bold text-orange-700">
-                    {records.filter(r => r.errorType === 'DUPLICATE').length}
-                  </p>
-                </div>
-                <div className="text-center p-3 bg-yellow-50 rounded-lg border border-yellow-100">
-                  <p className="text-xs text-yellow-600 font-medium mb-1">Không tìm thấy</p>
-                  <p className="text-xl font-bold text-yellow-700">
-                    {records.filter(r => r.errorType === 'MISSING_MERCHANT' || r.errorType === 'MISSING_AGENT' || (!r.errorType && (r.status === TransactionStatus.MISSING_IN_MERCHANT || r.status === TransactionStatus.MISSING_IN_AGENT))).length}
-                  </p>
-                </div>
-              </div>
-              <p className="text-xs text-slate-500 mt-3 text-center">
-                💡 Click vào từng loại lỗi trong bộ lọc để xem chi tiết từng loại
-              </p>
-            </div>
-          )}
 
           {/* Action Bar */}
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-lg shadow-sm border border-slate-100">
@@ -2601,107 +2103,6 @@ const ReconciliationModule: React.FC = () => {
             </div>
           </div>
 
-          {/* Aggregated Data Summary - Hiển thị dữ liệu tổng hợp */}
-          {currentSessionId && currentSessionData && (
-            <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-xl p-6 shadow-sm border border-indigo-100">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-indigo-800 flex items-center">
-                  <FileText className="w-5 h-5 mr-2" />
-                  Dữ liệu Tổng hợp (Aggregated Data)
-                </h3>
-                {currentSessionData.aggregatedData && (
-                  <button
-                    onClick={() => setShowAggregatedData(!showAggregatedData)}
-                    className="text-sm text-indigo-600 hover:text-indigo-800 flex items-center"
-                  >
-                    {showAggregatedData ? 'Ẩn' : 'Xem chi tiết'}
-                    {showAggregatedData ? <X className="w-4 h-4 ml-1" /> : <Eye className="w-4 h-4 ml-1" />}
-                  </button>
-                )}
-              </div>
-              
-              {currentSessionData.aggregatedData ? (
-                <>
-                  <div className="grid grid-cols-3 gap-4 mb-4">
-                    <div className="bg-white rounded-lg p-3 border border-indigo-200">
-                      <p className="text-xs text-slate-600 mb-1">Mã giao dịch</p>
-                      <p className="text-lg font-bold text-indigo-700">
-                        {Object.keys(currentSessionData.aggregatedData.byTransactionCode || {}).length}
-                      </p>
-                    </div>
-                    <div className="bg-white rounded-lg p-3 border border-indigo-200">
-                      <p className="text-xs text-slate-600 mb-1">Điểm thu</p>
-                      <p className="text-lg font-bold text-indigo-700">
-                        {Object.keys(currentSessionData.aggregatedData.byPointOfSale || {}).length}
-                      </p>
-                    </div>
-                    <div className="bg-white rounded-lg p-3 border border-indigo-200">
-                      <p className="text-xs text-slate-600 mb-1">Đại lý</p>
-                      <p className="text-lg font-bold text-indigo-700">
-                        {Object.keys(currentSessionData.aggregatedData.byAgent || {}).length}
-                      </p>
-                    </div>
-                  </div>
-              
-                  {showAggregatedData && (
-                    <div className="space-y-4 mt-4">
-                      {/* By Point of Sale */}
-                      {currentSessionData.aggregatedData.byPointOfSale && Object.keys(currentSessionData.aggregatedData.byPointOfSale).length > 0 && (
-                        <div className="bg-white rounded-lg p-4 border border-indigo-200">
-                          <h4 className="text-sm font-semibold text-slate-700 mb-3">Theo Điểm thu</h4>
-                          <div className="space-y-2 max-h-40 overflow-y-auto">
-                            {Object.entries(currentSessionData.aggregatedData.byPointOfSale).map(([pos, data]) => (
-                              <div key={pos} className="flex justify-between items-center text-sm border-b border-slate-100 pb-2">
-                                <span className="font-mono text-xs text-slate-600">{pos}</span>
-                                <div className="flex items-center space-x-3 text-xs">
-                                  <span className="text-slate-500">{data.totalTransactions} GD</span>
-                                  <span className="text-emerald-600 font-medium">{data.matchedCount} khớp</span>
-                                  <span className="text-red-600 font-medium">{data.errorCount} lỗi</span>
-                                  <span className="text-slate-700 font-semibold">{data.totalAmount.toLocaleString('vi-VN')}đ</span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      
-                      {/* By Agent */}
-                      {currentSessionData.aggregatedData.byAgent && Object.keys(currentSessionData.aggregatedData.byAgent).length > 0 && (
-                        <div className="bg-white rounded-lg p-4 border border-indigo-200">
-                          <h4 className="text-sm font-semibold text-slate-700 mb-3">Theo Đại lý</h4>
-                          <div className="space-y-2 max-h-40 overflow-y-auto">
-                            {Object.entries(currentSessionData.aggregatedData.byAgent).map(([agentId, data]) => {
-                              const agent = agents.find(a => a.id === agentId);
-                              return (
-                                <div key={agentId} className="flex justify-between items-center text-sm border-b border-slate-100 pb-2">
-                                  <span className="text-slate-700 font-medium">{agent?.name || agentId}</span>
-                                  <div className="flex items-center space-x-3 text-xs">
-                                    <span className="text-slate-500">{data.totalTransactions} GD</span>
-                                    <span className="text-emerald-600 font-medium">{data.matchedCount} khớp</span>
-                                    <span className="text-red-600 font-medium">{data.errorCount} lỗi</span>
-                                    <span className="text-slate-700 font-semibold">{data.totalAmount.toLocaleString('vi-VN')}đ</span>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                      
-                      <p className="text-xs text-slate-500 mt-2">
-                        💡 Dữ liệu tổng hợp này được dùng để phát hiện bill bổ sung/quên và tăng tốc độ truy vấn báo cáo
-                      </p>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="text-center py-4 text-slate-500 text-sm">
-                  <p>Đang tải dữ liệu tổng hợp...</p>
-                  <p className="text-xs mt-1">Dữ liệu sẽ được hiển thị sau khi đối soát hoàn tất</p>
-                </div>
-              )}
-            </div>
-          )}
 
           {/* Filter Bar */}
           <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-100 flex flex-wrap items-center gap-4">
@@ -2962,7 +2363,11 @@ const ReconciliationModule: React.FC = () => {
                <Trash2 className="w-4 h-4 mr-1" /> Xóa & Bắt đầu phiên đối soát mới
              </button>
           </div>
+            </>
+          )}
         </div>
+      )}
+        </>
       )}
 
       {/* Manual Edit Modal */}

@@ -1,21 +1,33 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Download, Plus, Search, Eye, DollarSign, Users, Clock, CheckCircle, Package, AlertCircle, Copy, CreditCard, Building2, Phone, X, Trash2 } from 'lucide-react';
-import { Payment, PaymentBatch, ReconciliationRecord, Agent } from '../types';
+import { useLocation } from 'react-router-dom';
+import { Download, Plus, Search, Eye, DollarSign, Users, Clock, CheckCircle, Package, AlertCircle, Copy, CreditCard, Building2, Phone, X, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
+import { Payment, PaymentBatch, ReconciliationRecord, Agent, UserBill, AdminPaymentToAgent, PaymentMethod, ReportRecord } from '../types';
 import { PaymentsService, SettingsService } from '../src/lib/firebaseServices';
+import { ReportService } from '../src/lib/reportServices';
 import { useRealtimeData, FirebaseUtils } from '../src/lib/firebaseHooks';
 import { createStyledWorkbook, createStyledSheet, addMetadataSheet, exportWorkbook, identifyNumberColumns } from '../src/utils/excelExportUtils';
-import { update, ref } from 'firebase/database';
+import { update, ref, push } from 'firebase/database';
 import { database } from '../src/lib/firebase';
 import Pagination from './Pagination';
 
 const Payouts: React.FC = () => {
-  // Firebase hooks for agents data
+  const location = useLocation();
+  // Firebase hooks for agents data and user bills
   const { data: agentsData } = useRealtimeData<Record<string, Agent>>('/agents');
+  const { data: userBillsData } = useRealtimeData<Record<string, UserBill>>('/user_bills');
+  const { data: adminPaymentsData } = useRealtimeData<Record<string, AdminPaymentToAgent>>('/admin_payments_to_agents');
   
   const [activeTab, setActiveTab] = useState<'unpaid' | 'batches'>('unpaid');
   const [searchTerm, setSearchTerm] = useState('');
   
-  // Unpaid Transactions State
+  // Unpaid Bills State (matched report_records that haven't been paid by admin)
+  const [unpaidReports, setUnpaidReports] = useState<ReportRecord[]>([]);
+  const [selectedReports, setSelectedReports] = useState<string[]>([]);
+  const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+  
+  // Legacy: Unpaid Transactions State (for backward compatibility)
   const [unpaidTransactions, setUnpaidTransactions] = useState<ReconciliationRecord[]>([]);
   const [selectedTransactions, setSelectedTransactions] = useState<string[]>([]);
   
@@ -36,9 +48,6 @@ const Payouts: React.FC = () => {
   const [copiedText, setCopiedText] = useState<string | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   
-  // Convert Firebase agents to array
-  const agents = FirebaseUtils.objectToArray(agentsData || {});
-  
   // Helper function to copy to clipboard
   const copyToClipboard = async (text: string, label: string) => {
     try {
@@ -49,6 +58,46 @@ const Payouts: React.FC = () => {
       console.error('Failed to copy:', err);
     }
   };
+
+  // Convert Firebase data to arrays - memoize to prevent infinite loops
+  const agents = useMemo(() => FirebaseUtils.objectToArray(agentsData || {}), [agentsData]);
+  const allUserBills = useMemo(() => FirebaseUtils.objectToArray(userBillsData || {}), [userBillsData]);
+  const allAdminPayments = useMemo(() => FirebaseUtils.objectToArray(adminPaymentsData || {}), [adminPaymentsData]);
+
+  // Reset state when route changes (force re-render)
+  useEffect(() => {
+    // Reset UI state when navigating to this route
+    setSelectedGroup(null);
+    setShowBatchModal(false);
+    setSelectedReports([]);
+    setSelectedTransactions([]);
+  }, [location.pathname]);
+
+  // Load matched report_records that haven't been paid by admin
+  useEffect(() => {
+    const loadUnpaidReports = async () => {
+      try {
+        const result = await ReportService.getReportRecords(
+          { status: 'MATCHED' },
+          { limit: 10000 } // Get all for now, can optimize later
+        );
+        
+        // Filter out reports that are already paid
+        const unpaid = result.records.filter(report => {
+          const isPaid = allAdminPayments.some((payment: AdminPaymentToAgent) => 
+            payment.billIds.includes(report.userBillId)
+          );
+          return !isPaid;
+        });
+        
+        setUnpaidReports(unpaid);
+      } catch (error) {
+        console.error('Error loading unpaid reports:', error);
+      }
+    };
+    
+    loadUnpaidReports();
+  }, [allAdminPayments]);
 
   // Load data - UI first, then data
   useEffect(() => {
@@ -174,7 +223,139 @@ const Payouts: React.FC = () => {
     return matchesSearch && matchesPointOfSale;
   });
 
-  // Handle batch creation
+  // Group matched reports by agent for new system
+  const reportsByAgent = useMemo(() => {
+    const groups: Record<string, { reports: ReportRecord[]; agent: Agent | undefined }> = {};
+    unpaidReports.forEach(report => {
+      if (!groups[report.agentId]) {
+        groups[report.agentId] = {
+          reports: [],
+          agent: agents.find(a => a.id === report.agentId)
+        };
+      }
+      groups[report.agentId].reports.push(report);
+    });
+    return groups;
+  }, [unpaidReports, agents]);
+
+  // Calculate totals for each agent group
+  const agentTotals = useMemo(() => {
+    const totals: Record<string, { totalAmount: number; feeAmount: number; netAmount: number }> = {};
+    Object.entries(reportsByAgent).forEach(([agentId, group]) => {
+      let totalAmount = 0;
+      let totalFee = 0;
+      
+      group.reports.forEach(report => {
+        totalAmount += report.amount;
+        
+        // Calculate fee based on paymentMethod and discountRatesByPointOfSale
+        const agent = group.agent;
+        const paymentMethod = report.paymentMethod;
+        const pointOfSaleName = report.pointOfSaleName;
+        
+        let feePercentage = 0;
+        if (agent?.discountRatesByPointOfSale && pointOfSaleName && agent.discountRatesByPointOfSale[pointOfSaleName]) {
+          feePercentage = agent.discountRatesByPointOfSale[pointOfSaleName][paymentMethod] || 0;
+        } else if (agent?.discountRates) {
+          feePercentage = agent.discountRates[paymentMethod] || 0;
+        }
+        
+        const fee = (report.amount * feePercentage) / 100;
+        totalFee += fee;
+      });
+      
+      totals[agentId] = {
+        totalAmount,
+        feeAmount: totalFee,
+        netAmount: totalAmount - totalFee
+      };
+    });
+    return totals;
+  }, [reportsByAgent]);
+
+  // Handle batch creation from matched reports (new system)
+  const handleCreateBatchFromReports = async () => {
+    if (selectedReports.length === 0) {
+      alert('Vui lòng chọn ít nhất một giao dịch');
+      return;
+    }
+
+    if (!batchName.trim()) {
+      alert('Vui lòng nhập tên đợt chi trả');
+      return;
+    }
+
+    try {
+      setIsCreatingBatch(true);
+      
+      const selectedReportsList = unpaidReports.filter(r => selectedReports.includes(r.id));
+      
+      // Group by agent
+      const reportsByAgentMap: Record<string, ReportRecord[]> = {};
+      selectedReportsList.forEach(report => {
+        if (!reportsByAgentMap[report.agentId]) {
+          reportsByAgentMap[report.agentId] = [];
+        }
+        reportsByAgentMap[report.agentId].push(report);
+      });
+
+      // Create AdminPaymentToAgent for each agent
+      const paymentIds: string[] = [];
+      for (const [agentId, reports] of Object.entries(reportsByAgentMap)) {
+        const agent = agents.find(a => a.id === agentId);
+        if (!agent) continue;
+
+        // Calculate totals for selected reports
+        let totalAmount = 0;
+        let totalFee = 0;
+        
+        reports.forEach(report => {
+          totalAmount += report.amount;
+          
+          const paymentMethod = report.paymentMethod;
+          const pointOfSaleName = report.pointOfSaleName;
+          
+          let feePercentage = 0;
+          if (agent?.discountRatesByPointOfSale && pointOfSaleName && agent.discountRatesByPointOfSale[pointOfSaleName]) {
+            feePercentage = agent.discountRatesByPointOfSale[pointOfSaleName][paymentMethod] || 0;
+          } else if (agent?.discountRates) {
+            feePercentage = agent.discountRates[paymentMethod] || 0;
+          }
+          
+          const fee = (report.amount * feePercentage) / 100;
+          totalFee += fee;
+        });
+
+        const paymentRef = await push(ref(database, 'admin_payments_to_agents'), {
+          agentId,
+          agentCode: agent.code,
+          billIds: reports.map(r => r.userBillId), // Use userBillId from report
+          totalAmount,
+          feeAmount: totalFee,
+          netAmount: totalAmount - totalFee,
+          note: batchName,
+          paidAt: FirebaseUtils.getServerTimestamp(),
+          createdBy: 'admin' // TODO: Get from auth
+        } as Omit<AdminPaymentToAgent, 'id'>);
+
+        paymentIds.push(paymentRef.key!);
+      }
+
+      alert(`Đã tạo ${paymentIds.length} đợt thanh toán thành công!`);
+      setSelectedReports([]);
+      setBatchName('');
+      setShowBatchModal(false);
+      
+      // Reload data
+      window.location.reload();
+    } catch (error: any) {
+      alert(`Đã xảy ra lỗi: ${error.message || 'Vui lòng thử lại'}`);
+    } finally {
+      setIsCreatingBatch(false);
+    }
+  };
+
+  // Handle batch creation (legacy - for ReconciliationRecord)
   const handleCreateBatch = async () => {
     if (selectedTransactions.length === 0) {
       alert('Vui lòng chọn ít nhất một giao dịch');
@@ -393,37 +574,62 @@ const Payouts: React.FC = () => {
     );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" style={{ position: 'relative', zIndex: 1 }}>
       {/* Header */}
-      <div className="flex justify-between items-center">
+      <div className="flex justify-between items-center relative z-10">
         <div>
           <h2 className="text-2xl font-bold text-slate-800">Thanh toán & Công nợ</h2>
           <p className="text-slate-500">Quản lý thanh toán cho đại lý và tạo đợt chi trả</p>
         </div>
         
-        {activeTab === 'unpaid' && selectedTransactions.length > 0 && (
-          <button
-            onClick={() => setShowBatchModal(true)}
-            className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-          >
-            <Package className="w-4 h-4" />
-            <span>Tạo đợt chi trả ({selectedTransactions.length})</span>
-          </button>
+        {activeTab === 'unpaid' && (
+          <>
+            {selectedReports.length > 0 && (
+              <button
+                onClick={() => setShowBatchModal(true)}
+                className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+              >
+                <Package className="w-4 h-4" />
+                <span>Tạo đợt chi trả ({selectedReports.length} giao dịch)</span>
+              </button>
+            )}
+            {selectedTransactions.length > 0 && selectedReports.length === 0 && (
+              <button
+                onClick={() => setShowBatchModal(true)}
+                className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+              >
+                <Package className="w-4 h-4" />
+                <span>Tạo đợt chi trả ({selectedTransactions.length})</span>
+              </button>
+            )}
+          </>
         )}
       </div>
 
       {/* Tabs */}
-      <div className="flex space-x-1 bg-slate-100 p-1 rounded-lg w-fit">
+      <div className="flex space-x-1 bg-slate-100 p-1 rounded-lg w-fit relative z-10">
         <button
-          onClick={() => setActiveTab('unpaid')}
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setActiveTab('unpaid');
+            setSelectedGroup(null); // Close modal if open
+          }}
           className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
             activeTab === 'unpaid' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-800'
           }`}
         >
-          Chưa thanh toán ({unpaidTransactions.length})
+          Chưa thanh toán ({unpaidReports.length > 0 ? unpaidReports.length : unpaidTransactions.length})
         </button>
         <button
-          onClick={() => setActiveTab('batches')}
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setActiveTab('batches');
+            setSelectedGroup(null); // Close modal if open
+          }}
           className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
             activeTab === 'batches' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-800'
           }`}
@@ -465,19 +671,162 @@ const Payouts: React.FC = () => {
       {/* Content */}
       {activeTab === 'unpaid' ? (
         <div className="space-y-4">
+          {/* New System: Matched Reports by Agent - Card Expandable */}
+          {unpaidReports.length > 0 && (() => {
+            // Filter and paginate agents
+            const agentEntries = Object.entries(reportsByAgent).filter(([agentId, group]) => {
+              const agent = group.agent;
+              const matchesSearch = !searchTerm || 
+                (agent?.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                (agent?.code || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                agentId.toLowerCase().includes(searchTerm.toLowerCase());
+              return matchesSearch;
+            });
+            
+            const totalAgents = agentEntries.length;
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = startIndex + itemsPerPage;
+            const paginatedAgents = agentEntries.slice(startIndex, endIndex);
+            const totalPages = Math.ceil(totalAgents / itemsPerPage);
+            
+            return (
+              <div className="bg-white rounded-xl border border-slate-200 p-6">
+                <h3 className="text-lg font-semibold text-slate-900 mb-4">
+                  Giao dịch đã khớp chờ thanh toán ({unpaidReports.length} giao dịch từ {totalAgents} đại lý)
+                </h3>
+                
+                <div className="space-y-4">
+                  {paginatedAgents.map(([agentId, group]) => {
+                    const agent = group.agent;
+                    const totals = agentTotals[agentId];
+                    if (!totals) return null;
+                    
+                    const isExpanded = expandedAgents.has(agentId);
+                    const isAllSelected = group.reports.every(r => selectedReports.includes(r.id));
+                    const someSelected = group.reports.some(r => selectedReports.includes(r.id));
+                    
+                    return (
+                      <div key={agentId} className="border border-slate-200 rounded-lg overflow-hidden">
+                        {/* Card Header */}
+                        <div className="bg-slate-50 p-4">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-3 flex-1">
+                              <input
+                                type="checkbox"
+                                checked={isAllSelected}
+                                ref={(el) => {
+                                  if (el) el.indeterminate = someSelected && !isAllSelected;
+                                }}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedReports(prev => [...prev, ...group.reports.map(r => r.id).filter(id => !prev.includes(id))]);
+                                  } else {
+                                    setSelectedReports(prev => prev.filter(id => !group.reports.some(r => r.id === id)));
+                                  }
+                                }}
+                                className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
+                              />
+                              <div className="flex-1">
+                                <h4 className="font-semibold text-slate-900">{agent?.name || agentId}</h4>
+                                <p className="text-sm text-slate-500">Mã: {agent?.code || agentId}</p>
+                              </div>
+                            </div>
+                            <div className="text-right mr-4">
+                              <p className="text-sm text-slate-500">Tổng tiền</p>
+                              <p className="text-lg font-bold text-slate-900">
+                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totals.totalAmount)}
+                              </p>
+                              <p className="text-xs text-slate-500">
+                                Phí: {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totals.feeAmount)} | 
+                                Thực trả: {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totals.netAmount)}
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => {
+                                const newExpanded = new Set(expandedAgents);
+                                if (isExpanded) {
+                                  newExpanded.delete(agentId);
+                                } else {
+                                  newExpanded.add(agentId);
+                                }
+                                setExpandedAgents(newExpanded);
+                              }}
+                              className="p-2 hover:bg-slate-200 rounded-lg transition-colors"
+                            >
+                              {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                            </button>
+                          </div>
+                          <div className="mt-2 text-sm text-slate-600">
+                            {group.reports.length} giao dịch
+                          </div>
+                        </div>
+                        
+                        {/* Expanded Content */}
+                        {isExpanded && (
+                          <div className="p-4 bg-white border-t border-slate-200">
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-sm">
+                                <thead className="bg-slate-50">
+                                  <tr>
+                                    <th className="px-3 py-2 text-left">Mã GD</th>
+                                    <th className="px-3 py-2 text-left">Ngày GD</th>
+                                    <th className="px-3 py-2 text-right">Số tiền</th>
+                                    <th className="px-3 py-2 text-left">Phương thức</th>
+                                    <th className="px-3 py-2 text-left">Điểm thu</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {group.reports.map((report) => (
+                                    <tr key={report.id} className="hover:bg-slate-50">
+                                      <td className="px-3 py-2 font-mono text-xs">{report.transactionCode}</td>
+                                      <td className="px-3 py-2">
+                                        {new Date(report.transactionDate).toLocaleDateString('vi-VN')}
+                                      </td>
+                                      <td className="px-3 py-2 text-right font-medium">
+                                        {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(report.amount)}
+                                      </td>
+                                      <td className="px-3 py-2">{report.paymentMethod}</td>
+                                      <td className="px-3 py-2 font-mono text-xs">{report.pointOfSaleName || '-'}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                
+                {/* Pagination */}
+                {totalPages > 1 && (
+                  <div className="mt-6">
+                    <Pagination
+                      currentPage={currentPage}
+                      totalPages={totalPages}
+                      onPageChange={setCurrentPage}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Legacy System: Reconciliation Records */}
           {loading ? (
             <>
               <SkeletonCard />
               <SkeletonCard />
               <SkeletonCard />
             </>
-          ) : filteredGroups.length === 0 ? (
+          ) : filteredGroups.length === 0 && unpaidReports.length === 0 ? (
             <div className="text-center py-12 bg-white rounded-xl border border-slate-200">
               <DollarSign className="w-12 h-12 mx-auto text-slate-300 mb-4" />
               <h3 className="text-lg font-medium text-slate-600">Không có giao dịch chưa thanh toán</h3>
               <p className="text-slate-400 mt-2">Tất cả giao dịch đã được thanh toán hoặc chưa có dữ liệu đối soát</p>
             </div>
-          ) : (
+          ) : filteredGroups.length > 0 && unpaidReports.length === 0 ? (
             <>
               {/* Table tổng quát */}
               <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -576,7 +925,14 @@ const Payouts: React.FC = () => {
                 if (!agentId || !group) return null;
                 
                 return (
-                  <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setSelectedGroup(null)}>
+                  <div 
+                    className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4" 
+                    onClick={(e) => {
+                      if (e.target === e.currentTarget) {
+                        setSelectedGroup(null);
+                      }
+                    }}
+                  >
                     <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
                       <div className="sticky top-0 bg-white border-b border-slate-200 p-6 flex items-center justify-between">
                         <h3 className="text-xl font-bold text-slate-800">
@@ -608,48 +964,50 @@ const Payouts: React.FC = () => {
                 </div>
 
                         {/* Agent Bank Info */}
-                {(() => {
-                  const agent = agents.find(a => a.id === agentId || a.code === agentId);
-                  return agent ? (
-                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                      <h4 className="text-sm font-semibold text-blue-800 mb-3 flex items-center">
-                        <CreditCard className="w-4 h-4 mr-2" />
-                        Thông tin chuyển khoản
-                      </h4>
+                        {(() => {
+                          const agent = agents.find(a => a.id === agentId || a.code === agentId);
+                          if (!agent) return null;
+                          
+                          return (
+                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                              <h4 className="text-sm font-semibold text-blue-800 mb-3 flex items-center">
+                                <CreditCard className="w-4 h-4 mr-2" />
+                                Thông tin chuyển khoản
+                              </h4>
                               <div className="space-y-4">
                                 <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="text-xs text-blue-600 font-medium">Số tài khoản</label>
-                            <div className="flex items-center space-x-2 mt-1">
-                              <span className="font-mono text-sm font-bold text-blue-900 bg-white px-3 py-1 rounded border">
-                                {agent.bankAccount || 'Chưa cập nhật'}
-                              </span>
-                              {agent.bankAccount && (
-                                <button
-                                  onClick={() => copyToClipboard(agent.bankAccount, `STK-${agentId}`)}
-                                  className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-100 rounded"
-                                >
-                                  <Copy className="w-4 h-4" />
-                                </button>
-                                )}
-                              </div>
-                            </div>
-                          <div>
-                            <label className="text-xs text-blue-600 font-medium">Tên người nhận</label>
-                            <div className="flex items-center space-x-2 mt-1">
-                              <span className="text-sm font-medium text-blue-900 bg-white px-3 py-1 rounded border">
-                                {agent.name}
-                              </span>
-                              <button
-                                onClick={() => copyToClipboard(agent.name, `Name-${agentId}`)}
-                                className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-100 rounded"
-                              >
-                                <Copy className="w-4 h-4" />
-                              </button>
+                                  <div>
+                                    <label className="text-xs text-blue-600 font-medium">Số tài khoản</label>
+                                    <div className="flex items-center space-x-2 mt-1">
+                                      <span className="font-mono text-sm font-bold text-blue-900 bg-white px-3 py-1 rounded border">
+                                        {agent.bankAccount || 'Chưa cập nhật'}
+                                      </span>
+                                      {agent.bankAccount && (
+                                        <button
+                                          onClick={() => copyToClipboard(agent.bankAccount, `STK-${agentId}`)}
+                                          className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-100 rounded"
+                                        >
+                                          <Copy className="w-4 h-4" />
+                                        </button>
+                                      )}
                                     </div>
-                            </div>
-                          </div>
-                          
+                                  </div>
+                                  <div>
+                                    <label className="text-xs text-blue-600 font-medium">Tên người nhận</label>
+                                    <div className="flex items-center space-x-2 mt-1">
+                                      <span className="text-sm font-medium text-blue-900 bg-white px-3 py-1 rounded border">
+                                        {agent.name}
+                                      </span>
+                                      <button
+                                        onClick={() => copyToClipboard(agent.name, `Name-${agentId}`)}
+                                        className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-100 rounded"
+                                      >
+                                        <Copy className="w-4 h-4" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                                
                                 {/* QR Code Display */}
                                 {agent.qrCodeBase64 && (
                                   <div className="pt-3 border-t border-blue-200">
@@ -660,36 +1018,36 @@ const Payouts: React.FC = () => {
                                         alt="QR Code thanh toán" 
                                         className="w-48 h-48 object-contain"
                                       />
-                              </div>
+                                    </div>
                                     <p className="text-xs text-blue-600 text-center mt-2">
                                       Quét mã QR để chuyển khoản nhanh
                                     </p>
-                            </div>
-                          )}
+                                  </div>
+                                )}
 
-                        {/* Quick Copy All Button */}
-                        <div className="pt-2 border-t border-blue-200">
-                          <button
-                            onClick={() => {
-                              const allInfo = `STK: ${agent.bankAccount}\nTên: ${agent.name}\nSố tiền: ${group.netAmount.toLocaleString('vi-VN')} VNĐ${agent.bankBranch ? `\nChi nhánh: ${agent.bankBranch}` : ''}${agent.contactPhone ? `\nSĐT: ${agent.contactPhone}` : ''}`;
-                              copyToClipboard(allInfo, `All-${agentId}`);
-                            }}
-                            className="w-full bg-blue-600 text-white text-sm font-medium py-2 px-4 rounded hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2"
-                          >
-                            <Copy className="w-4 h-4" />
-                            <span>Copy tất cả thông tin chuyển khoản</span>
-                          </button>
-                          {copiedText === `All-${agentId}` && (
-                            <div className="text-center text-xs text-green-600 font-medium mt-1">
-                              ✅ Đã copy tất cả thông tin!
+                                {/* Quick Copy All Button */}
+                                <div className="pt-2 border-t border-blue-200">
+                                  <button
+                                    onClick={() => {
+                                      const allInfo = `STK: ${agent.bankAccount}\nTên: ${agent.name}\nSố tiền: ${group.netAmount.toLocaleString('vi-VN')} VNĐ${agent.bankBranch ? `\nChi nhánh: ${agent.bankBranch}` : ''}${agent.contactPhone ? `\nSĐT: ${agent.contactPhone}` : ''}`;
+                                      copyToClipboard(allInfo, `All-${agentId}`);
+                                    }}
+                                    className="w-full bg-blue-600 text-white text-sm font-medium py-2 px-4 rounded hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2"
+                                  >
+                                    <Copy className="w-4 h-4" />
+                                    <span>Copy tất cả thông tin chuyển khoản</span>
+                                  </button>
+                                  {copiedText === `All-${agentId}` && (
+                                    <div className="text-center text-xs text-green-600 font-medium mt-1">
+                                      ✅ Đã copy tất cả thông tin!
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
                             </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                          ) : null;
+                          );
                         })()}
-                        
+
                         {/* Transactions Table */}
                         <div>
                           <h4 className="text-sm font-semibold text-slate-700 mb-3">Chi tiết giao dịch ({group.transactions.length})</h4>
@@ -735,10 +1093,10 @@ const Payouts: React.FC = () => {
                       </div>
                       </div>
                     </div>
-                  );
-                })()}
+                );
+              })()}
             </>
-          )}
+          ) : null}
         </div>
       ) : (
         <div className="space-y-4">
@@ -751,11 +1109,12 @@ const Payouts: React.FC = () => {
               <p className="text-slate-400 mt-2">Tạo đợt chi trả đầu tiên từ các giao dịch chưa thanh toán</p>
             </div>
           ) : (
-            paymentBatches.map((batch) => (
-              <div key={batch.id} className="bg-white border border-slate-200 rounded-xl p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-lg font-semibold text-slate-800">{batch.name}</h3>
+            <>
+              {paymentBatches.map((batch) => (
+                <div key={batch.id} className="bg-white border border-slate-200 rounded-xl p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-lg font-semibold text-slate-800">{batch.name}</h3>
                     <p className="text-sm text-slate-500">
                       {new Date(batch.createdAt).toLocaleDateString('vi-VN')} • 
                       {batch.agentCount} đại lý • {batch.paymentCount} thanh toán
@@ -798,32 +1157,33 @@ const Payouts: React.FC = () => {
                   </div>
                 </div>
               </div>
-            ))
-          )}
-          
-          {/* Pagination for batches (lazy loading) */}
-          {batchesTotal > batchesItemsPerPage && (
-            <div className="mt-4">
-              <Pagination
-                currentPage={batchesPage}
-                totalPages={Math.ceil(batchesTotal / batchesItemsPerPage)}
-                onPageChange={handleBatchesPageChange}
-                itemsPerPage={batchesItemsPerPage}
-                totalItems={batchesTotal}
-              />
-              {loadingBatches && (
-                <div className="text-center text-sm text-slate-500 mt-2">
-                  Đang tải thêm dữ liệu...
+              ))}
+              
+              {/* Pagination for batches (lazy loading) */}
+              {batchesTotal > batchesItemsPerPage && (
+                <div className="mt-4">
+                  <Pagination
+                    currentPage={batchesPage}
+                    totalPages={Math.ceil(batchesTotal / batchesItemsPerPage)}
+                    onPageChange={handleBatchesPageChange}
+                    itemsPerPage={batchesItemsPerPage}
+                    totalItems={batchesTotal}
+                  />
+                  {loadingBatches && (
+                    <div className="text-center text-sm text-slate-500 mt-2">
+                      Đang tải thêm dữ liệu...
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
+            </>
           )}
         </div>
       )}
 
       {/* Create Batch Modal */}
       {showBatchModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60]">
           <div className="bg-white rounded-xl p-6 w-full max-w-md">
             <h3 className="text-lg font-semibold text-slate-800 mb-4">Tạo đợt chi trả mới</h3>
             
@@ -841,36 +1201,110 @@ const Payouts: React.FC = () => {
                 />
               </div>
               
+              {/* QR Code của đại lý */}
+              {(() => {
+                // Lấy agent đầu tiên từ selected reports để hiển thị QR
+                const firstReport = unpaidReports.find(r => selectedReports.includes(r.id));
+                const selectedAgent = firstReport ? agents.find(a => a.id === firstReport.agentId) : null;
+                
+                // Nếu có nhiều agent, hiển thị cảnh báo
+                const selectedAgentIds = new Set(
+                  unpaidReports
+                    .filter(r => selectedReports.includes(r.id))
+                    .map(r => r.agentId)
+                );
+                const hasMultipleAgents = selectedAgentIds.size > 1;
+                
+                return selectedAgent?.qrCodeBase64 ? (
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                    <div className="text-sm font-semibold text-green-800 mb-2 flex items-center">
+                      <CreditCard className="w-4 h-4 mr-2" />
+                      Mã QR thanh toán {hasMultipleAgents ? `(${selectedAgent.name})` : 'của đại lý'}
+                    </div>
+                    {hasMultipleAgents && (
+                      <p className="text-xs text-green-600 mb-2">
+                        ⚠️ Có {selectedAgentIds.size} đại lý. Đang hiển thị QR của {selectedAgent.name}
+                      </p>
+                    )}
+                    <div className="bg-white rounded-lg p-4 flex justify-center border-2 border-green-200">
+                      <img 
+                        src={selectedAgent.qrCodeBase64} 
+                        alt="QR Code thanh toán" 
+                        className="w-48 h-48 object-contain"
+                      />
+                    </div>
+                    <p className="text-xs text-green-600 text-center mt-2">
+                      Quét mã QR để chuyển khoản nhanh
+                    </p>
+                  </div>
+                ) : null;
+              })()}
+
               <div className="bg-slate-50 rounded-lg p-4">
                 <div className="text-sm text-slate-600 mb-2">Tóm tắt:</div>
                 <div className="space-y-1 text-sm">
-                  <div className="flex justify-between">
-                    <span>Giao dịch đã chọn:</span>
-                    <span className="font-medium">{selectedTransactions.length}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Tổng giá trị:</span>
-                    <span className="font-medium">
-                      {unpaidTransactions
-                        .filter(tx => selectedTransactions.includes(tx.id))
-                        .reduce((sum, tx) => sum + (tx.merchantData?.amount || 0), 0)
-                        .toLocaleString('vi-VN')} VNĐ
-                    </span>
-                  </div>
+                  {selectedReports.length > 0 ? (
+                    <>
+                      <div className="flex justify-between">
+                        <span>Giao dịch đã chọn:</span>
+                        <span className="font-medium">{selectedReports.length}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Tổng giá trị:</span>
+                        <span className="font-medium">
+                          {unpaidReports
+                            .filter(r => selectedReports.includes(r.id))
+                            .reduce((sum, r) => sum + r.amount, 0)
+                            .toLocaleString('vi-VN')} VNĐ
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Số đại lý:</span>
+                        <span className="font-medium">
+                          {new Set(unpaidReports.filter(r => selectedReports.includes(r.id)).map(r => r.agentId)).size}
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex justify-between">
+                        <span>Giao dịch đã chọn:</span>
+                        <span className="font-medium">{selectedTransactions.length}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Tổng giá trị:</span>
+                        <span className="font-medium">
+                          {unpaidTransactions
+                            .filter(tx => selectedTransactions.includes(tx.id))
+                            .reduce((sum, tx) => sum + (tx.merchantData?.amount || 0), 0)
+                            .toLocaleString('vi-VN')} VNĐ
+                        </span>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             </div>
             
             <div className="flex space-x-3 mt-6">
               <button
-                onClick={() => setShowBatchModal(false)}
+                onClick={() => {
+                  setShowBatchModal(false);
+                  setBatchName('');
+                }}
                 className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors"
               >
                 Hủy
               </button>
               <button
-                onClick={handleCreateBatch}
-                disabled={isCreatingBatch || !batchName.trim()}
+                onClick={() => {
+                  if (selectedReports.length > 0) {
+                    handleCreateBatchFromReports();
+                  } else {
+                    handleCreateBatch();
+                  }
+                }}
+                disabled={isCreatingBatch || !batchName.trim() || (selectedReports.length === 0 && selectedTransactions.length === 0)}
                 className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isCreatingBatch ? 'Đang tạo...' : 'Tạo đợt'}

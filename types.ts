@@ -27,9 +27,22 @@ export enum UserStatus {
   LOCKED = 'Đang khóa'
 }
 
+// User - Người dùng cuối (end user)
 export interface User {
   id: string;
-  username: string; // New field
+  phone: string; // unique, dùng để login (required)
+  email?: string; // Email (optional)
+  password: string; // plain text (no hashing)
+  fullName: string;
+  qrCodeBase64?: string; // QR thanh toán của user
+  createdAt: string;
+  lastActive: string;
+}
+
+// Admin User - Nhân viên admin (giữ nguyên cho backward compatibility)
+export interface AdminUser {
+  id: string;
+  username: string;
   fullName: string;
   email: string;
   role: UserRole;
@@ -82,8 +95,9 @@ export interface Agent {
   updatedAt?: string;
   // Enhanced fields
   assignedMerchants?: string[]; // Danh sách merchant ID được phép sử dụng
-  contactPhone?: string; // Số điện thoại liên hệ
-  paymentPhone?: string; // Số điện thoại thanh toán (từ ảnh VNPay) - dùng để auto-link agent
+  contactPhone: string; // SỐ ĐIỆN THOẠI - dùng để login (REQUIRED)
+  password: string; // Hashed password - admin set (REQUIRED)
+  paymentPhone?: string; // Số điện thoại thanh toán (từ ảnh VNPay) - DEPRECATED: không dùng nữa
   contactEmail?: string;
   address?: string;
   taxCode?: string;
@@ -94,24 +108,33 @@ export interface Agent {
   assignedPointOfSales?: string[]; // Danh sách điểm thu được gán (lưu pointOfSaleName hoặc pointOfSaleCode)
   // Chiết khấu theo từng điểm bán (NEW WORKFLOW: Gán điểm bán trước, sau đó cấu hình chiết khấu)
   discountRatesByPointOfSale?: Record<string, Record<string, number>>; // { pointOfSaleName: { paymentMethod: rate } }
+  // Referral links
+  referralLinkUser?: string; // Link cho user: "/user/upbill?agents=AG_001"
+  referralLinkAdmin?: string; // Link cho admin: "/admin/reconciliation?agent=AG_001"
+  totalUsers?: number; // Số user đã up bill cho đại lý này
+  totalBills?: number; // Số bill đã nhận
 }
 
 // Represents a row from the Merchant's export file
 export interface MerchantTransaction {
   id: string;
   merchantCode: string;
-  transactionCode: string; // Mã chuẩn chi
-  amount: number;
-  timestamp: string;
-  method: PaymentMethod;
-  // Point of sale fields from Excel
-  pointOfSaleName?: string; // Điểm thu từ Excel
-  pointOfSaleCode?: string; // Mã điểm thu từ Excel
-  branchName?: string; // Chi nhánh từ Excel
-  sourceFile?: string; // Tên file Excel nguồn (cho tracking)
+  transactionCode: string; // Mã chuẩn chi / Mã trừ tiền
+  amount: number; // Số tiền sau KM (dùng để hiển thị)
+  amountBeforeDiscount?: number; // Số tiền trước KM (dùng để match)
+  transactionDate: string;      // ISO string - ngày giao dịch
+  uploadSessionId: string;      // ID phiên upload file Excel
+  pointOfSaleName?: string;      // Điểm thu từ Excel
+  pointOfSaleCode?: string;      // Mã điểm thu
+  branchName?: string;           // Chi nhánh
+  invoiceNumber?: string;         // Số hóa đơn
+  phoneNumber?: string;          // Số điện thoại
+  promotionCode?: string;         // Mã khuyến mại
+  rawRowIndex?: number;         // Optional: index dòng trong file để debug
+  createdAt: string;            // ISO - thời điểm tạo record
 }
 
-// Represents a bill submitted by the Agent
+// Represents a bill submitted by the Agent (DEPRECATED - dùng UserBill thay thế)
 export interface AgentSubmission {
   id: string;
   agentId: string;
@@ -124,8 +147,90 @@ export interface AgentSubmission {
   ocrConfidence?: number; // Độ tin cậy của OCR (0-1)
   // Point of sale from OCR
   pointOfSaleName?: string; // Điểm thu từ OCR
-  // Bank account from OCR - dùng để auto-link agent
+  // Bank account from OCR - DEPRECATED: không dùng nữa
   bankAccount?: string; // Số tài khoản ngân hàng từ ảnh VNPay (ví dụ: "093451103")
+}
+
+// UserBill - Bill do user up lên
+export interface UserBill {
+  id: string;
+  userId: string;
+  agentId: string;
+  agentCode: string; // Mã đại lý (AG_001)
+  transactionCode: string; // Mã chuẩn chi / Mã giao dịch
+  amount: number;
+  paymentMethod: PaymentMethod; // Loại bill: POS / QR 1 (VNPay) / QR 2 (App Bank) / Sofpos
+  pointOfSaleName?: string;
+  imageUrl: string; // Base64 ảnh bill
+  timestamp: string;
+  invoiceNumber?: string;
+  
+  // Thông tin mapping từ đối soát (null ban đầu)
+  merchantData?: MerchantTransaction;
+  status: 'PENDING' | 'MATCHED' | 'ERROR';
+  errorMessage?: string; // Error message đơn giản, văn phong Việt
+  
+  // Payment tracking
+  isPaidByAgent: boolean; // Đại lý đã thanh toán chưa
+  paidByAgentAt?: string;
+  paidByAgentNote?: string;
+  
+  // Session tracking
+  uploadSessionId?: string; // ID của session upload (khi user upload nhiều bills cùng lúc)
+  
+  createdAt: string;
+}
+
+// User Bill Session - Session upload bills của user
+export interface UserBillSession {
+  id: string;
+  userId: string;
+  agentId: string;
+  agentName: string;
+  agentCode: string;
+  createdAt: string; // ISO timestamp
+  billCount: number;
+  errorCount: number;
+  matchedCount: number;
+  pendingCount: number;
+}
+
+// Agent Reconciliation Session - Session đối soát của đại lý/admin
+export interface AgentReconciliationSession {
+  id: string;
+  agentId: string;
+  performedBy: 'AGENT' | 'ADMIN'; // Ai thực hiện đối soát
+  merchantFileName: string;
+  billCount: number;
+  matchedCount: number;
+  errorCount: number;
+  status: 'COMPLETED' | 'FAILED';
+  createdAt: string;
+}
+
+// Agent Payment to User - Lịch sử thanh toán đại lý cho user
+export interface AgentPaymentToUser {
+  id: string;
+  agentId: string;
+  userId: string;
+  billIds: string[]; // Danh sách user_bills IDs
+  totalAmount: number;
+  note: string;
+  paidAt: string;
+}
+
+// Admin Payment to Agent - Admin thanh toán cho đại lý
+export interface AdminPaymentToAgent {
+  id: string;
+  agentId: string;
+  agentCode: string;
+  billIds: string[]; // Danh sách user_bills IDs đã khớp
+  totalAmount: number; // Tổng tiền giao dịch
+  feeAmount: number; // Phí chiết khấu
+  netAmount: number; // Số tiền thực trả cho đại lý
+  note: string;
+  paidAt: string;
+  createdBy: string; // Admin user ID
 }
 
 export interface ReconciliationRecord {
@@ -361,4 +466,53 @@ export interface TransactionReport {
   totalRevenue: number;
   totalProfit: number;
   totalFees: number;
+}
+
+// Report Status - Trạng thái đối soát trong báo cáo
+export type ReportStatus = 'MATCHED' | 'UNMATCHED' | 'ERROR';
+
+// Report Record - Kết quả đối soát giữa user_bills và merchant_transactions
+export interface ReportRecord {
+  id: string;
+  // Snapshot từ user_bills (Thông tin từ Bill)
+  userBillId: string;
+  userId: string;
+  agentId: string;
+  agentCode: string;
+  transactionCode: string; // Mã giao dịch từ bill
+  amount: number; // Số tiền từ bill
+  paymentMethod: PaymentMethod;
+  pointOfSaleName?: string; // Điểm thu từ bill
+  transactionDate: string;      // ISO - thời gian giao dịch từ bill
+  userBillCreatedAt: string;    // ISO - thời điểm tạo bill
+  invoiceNumber?: string;        // Số hóa đơn từ bill (nếu có)
+  
+  // Snapshot từ merchant_transactions (Thông tin từ Merchants - file Excel)
+  merchantTransactionId?: string;
+  merchantCode?: string;
+  merchantAmount?: number; // Số tiền sau KM từ merchant
+  merchantAmountBeforeDiscount?: number; // Số tiền trước KM từ merchant (dùng để match)
+  merchantPointOfSaleName?: string; // Điểm thu từ merchant
+  merchantPointOfSaleCode?: string; // Mã điểm thu từ merchant
+  merchantBranchName?: string; // Chi nhánh từ merchant
+  merchantInvoiceNumber?: string; // Số hóa đơn từ merchant
+  merchantPhoneNumber?: string; // Số điện thoại từ merchant
+  merchantPromotionCode?: string; // Mã khuyến mại từ merchant
+  merchantTransactionDate?: string; // ISO - thời gian giao dịch từ merchant
+  
+  // Reconciliation result
+  status: ReportStatus;
+  errorMessage?: string;
+  
+  // Metadata
+  reconciledAt: string;         // ISO – thời điểm chạy đối soát
+  reconciledBy: 'ADMIN';        // chỉ Admin
+  reconciliationSessionId?: string;
+  
+  // Admin editable fields (edit chỉ cập nhật vào report_records)
+  note?: string;
+  isManuallyEdited?: boolean;
+  editedFields?: string[];
+  
+  createdAt: string;            // ISO – thời điểm tạo record
 }

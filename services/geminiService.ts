@@ -178,42 +178,52 @@ Bạn là chuyên gia OCR chuyên đọc thông tin giao dịch từ nhiều lo�
 
 Nhiệm vụ: Trích xuất CHÍNH XÁC các thông tin quan trọng từ ảnh screenshot màn hình thanh toán:
 
-**CÁC LOẠI BILL CẦN NHẬN DIỆN:**
+**CÁC LOẠI BILL CẦN NHẬN DIỆN (QUAN TRỌNG - PHẢI XÁC ĐỊNH LOẠI BILL):**
 
-1. **VNPay**: 
+1. **VNPay** → paymentMethod: "QR 1 (VNPay)": 
    - Tìm "Mã giao dịch" hoặc "Transaction ID" (số dài 17-18 chữ số)
    - Tìm "Số tiền thanh toán" hoặc "Tổng tiền" (VND)
    - Tìm "Số hóa đơn" (có thể là "MUA1", "MUA12", "MAU11", v.v.)
    - Tìm "Tên điểm thanh toán" hoặc "Thông tin điểm thanh toán" → "Tên" (ví dụ: "ANCATTUONG66PKV01", "TUAN VU THD 01")
+   - Dấu hiệu nhận biết: Logo VNPay, "VNPay", "Thanh toán qua VNPay"
 
-2. **PhonePOS**:
+2. **PhonePOS / POS** → paymentMethod: "POS":
    - Tìm "Mã chuẩn chỉ" (transaction code, có thể ngắn hơn, ví dụ: "596950")
    - Tìm số tiền (thường hiển thị lớn, ví dụ: "20,027,000 ₫")
    - Tìm "ĐIỂM BÁN" (ví dụ: "MINH THAO 122PVD 01")
    - Tìm "Số hóa đơn" (ví dụ: "000016")
+   - Dấu hiệu nhận biết: "PhonePOS", "POS", "Máy POS"
 
-3. **VietinBank**:
+3. **VietinBank / App Bank** → paymentMethod: "QR 2 (App Bank)":
    - Tìm "Mã giao dịch" hoặc số tham chiếu (ví dụ: "5416900607")
    - Tìm "Số tiền" (VND)
    - Tìm "Thanh toán cho" (có thể chứa điểm thu, ví dụ: "MINHTHAO/ điểm bán MINH THAO 122PVD 01")
    - Tìm "Số hóa đơn" (ví dụ: "000000164970345")
+   - Dấu hiệu nhận biết: Logo VietinBank, "VietinBank", "Vietcombank", "BIDV", "Techcombank", hoặc tên ngân hàng khác
 
-4. **Các app ngân hàng khác**:
+4. **Sofpos** → paymentMethod: "Sofpos":
    - Tìm mã giao dịch (transaction code/ID)
    - Tìm số tiền thanh toán
    - Tìm điểm thu/điểm bán (point of sale/collection point)
+   - Dấu hiệu nhận biết: "Sofpos", "SOFPOS", logo Sofpos
 
 **THÔNG TIN CẦN TRÍCH XUẤT:**
 
 1. **transactionCode** (BẮT BUỘC): Mã giao dịch/Mã chuẩn chi - có thể là số dài (17-18 chữ số) hoặc số ngắn (6-7 chữ số)
 2. **amount** (BẮT BUỘC): Số tiền thanh toán (VND) - loại bỏ dấu chấm/phẩy, chuyển thành số nguyên
-3. **invoiceNumber** (TÙY CHỌN): Số hóa đơn nếu có
-4. **pointOfSaleName** (TÙY CHỌN): Tên điểm thu/điểm bán - tìm trong các field: "Điểm bán", "Tên điểm thanh toán", "Payment point", "ĐIỂM BÁN", "Thanh toán cho" (extract phần điểm bán nếu có)
-5. **bankAccount** (TÙY CHỌN): Số tài khoản ngân hàng - tìm trong field "Số tài khoản", "Số TK", "Account number", "Số điện thoại thanh toán" (ví dụ: "093451103"). Đây chính là số tài khoản ngân hàng hiển thị trên ảnh VNPay, dùng để link với đại lý
-6. **timestamp** (TÙY CHỌN): Thời gian giao dịch, format ISO string
+3. **paymentMethod** (BẮT BUỘC): Loại bill - PHẢI là một trong 4 giá trị sau:
+   - "QR 1 (VNPay)" - nếu là VNPay
+   - "POS" - nếu là PhonePOS hoặc máy POS
+   - "QR 2 (App Bank)" - nếu là VietinBank, Vietcombank, BIDV, Techcombank hoặc app ngân hàng khác
+   - "Sofpos" - nếu là Sofpos
+4. **invoiceNumber** (TÙY CHỌN): Số hóa đơn nếu có
+5. **pointOfSaleName** (TÙY CHỌN): Tên điểm thu/điểm bán - tìm trong các field: "Điểm bán", "Tên điểm thanh toán", "Payment point", "ĐIỂM BÁN", "Thanh toán cho" (extract phần điểm bán nếu có)
+6. **bankAccount** (TÙY CHỌN): Số tài khoản ngân hàng - tìm trong field "Số tài khoản", "Số TK", "Account number" (ví dụ: "093451103")
+7. **timestamp** (TÙY CHỌN): Thời gian giao dịch, format ISO string
 
 **QUAN TRỌNG:**
-- transactionCode và amount là BẮT BUỘC - nếu không tìm thấy, trả về lỗi
+- transactionCode, amount và paymentMethod là BẮT BUỘC - nếu không tìm thấy, trả về lỗi
+- paymentMethod PHẢI là một trong 4 giá trị: "QR 1 (VNPay)", "POS", "QR 2 (App Bank)", "Sofpos"
 - pointOfSaleName: Extract từ các field liên quan đến điểm thu/điểm bán, có thể nằm trong "Thanh toán cho" (ví dụ: "MINHTHAO/ điểm bán MINH THAO 122PVD 01" → "MINH THAO 122PVD 01")
 - amount phải là số nguyên (không có dấu chấm/phẩy), đơn vị VND
 
@@ -221,6 +231,7 @@ Nhiệm vụ: Trích xuất CHÍNH XÁC các thông tin quan trọng từ ảnh 
 {
   "transactionCode": "20436098128882688",
   "amount": 268000,
+  "paymentMethod": "QR 1 (VNPay)",
   "invoiceNumber": "MUA1",
   "pointOfSaleName": "ANCATTUONG66PKV01",
   "bankAccount": "093451103",
@@ -237,7 +248,7 @@ Nhiệm vụ: Trích xuất CHÍNH XÁC các thông tin quan trọng từ ảnh 
     let mimeType = 'image/jpeg';
     if (base64Data.startsWith('/9j/') || base64Data.startsWith('iVBORw0KGgo')) {
       mimeType = base64Data.startsWith('/9j/') ? 'image/jpeg' : 'image/png';
-    }
+  }
 
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
@@ -280,8 +291,14 @@ Nhiệm vụ: Trích xuất CHÍNH XÁC các thông tin quan trọng từ ảnh 
     }
 
     // Validate required fields
-    if (!extracted.transactionCode || !extracted.amount) {
-      throw new Error(`Thiếu thông tin bắt buộc: transactionCode=${extracted.transactionCode}, amount=${extracted.amount}`);
+    if (!extracted.transactionCode || !extracted.amount || !extracted.paymentMethod) {
+      throw new Error(`Thiếu thông tin bắt buộc: transactionCode=${extracted.transactionCode}, amount=${extracted.amount}, paymentMethod=${extracted.paymentMethod}`);
+    }
+
+    // Validate paymentMethod
+    const validPaymentMethods = ['QR 1 (VNPay)', 'QR 2 (App Bank)', 'POS', 'Sofpos'];
+    if (!validPaymentMethods.includes(extracted.paymentMethod)) {
+      throw new Error(`Loại bill không hợp lệ: ${extracted.paymentMethod}. Phải là một trong: ${validPaymentMethods.join(', ')}`);
     }
 
     // Parse amount - handle Vietnamese number format
@@ -327,7 +344,10 @@ Nhiệm vụ: Trích xuất CHÍNH XÁC các thông tin quan trọng từ ảnh 
       if (bankAccount === '' || bankAccount.length < 8) bankAccount = undefined;
     }
 
-    // Create AgentSubmission object
+    // Extract paymentMethod
+    const paymentMethod = extracted.paymentMethod as 'QR 1 (VNPay)' | 'QR 2 (App Bank)' | 'POS' | 'Sofpos';
+
+    // Create AgentSubmission object (for backward compatibility)
     const submission: AgentSubmission = {
       id: `agent_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       agentId,
@@ -341,6 +361,7 @@ Nhiệm vụ: Trích xuất CHÍNH XÁC các thông tin quan trọng từ ảnh 
       ocrConfidence: 0.9 // Default confidence, can be enhanced later
     };
 
-    return submission;
+    // Return submission with paymentMethod added
+    return { ...submission, paymentMethod };
   }, 3, 2000); // 3 retries, 2s base delay (2s, 4s, 8s)
 };

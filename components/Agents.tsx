@@ -39,14 +39,19 @@ const Agents: React.FC = () => {
     },
     isActive: true,
     assignedPointOfSales: [],
-    contactPhone: '',
+    contactPhone: '', // REQUIRED - dùng để login
+    password: '', // REQUIRED - admin set password
     contactEmail: '',
     address: '',
     taxCode: '',
     bankBranch: '',
     qrCodeBase64: '',
     notes: '',
-    discountRatesByPointOfSale: {} // Chiết khấu theo từng điểm bán
+    discountRatesByPointOfSale: {}, // Chiết khấu theo từng điểm bán
+    referralLinkUser: '',
+    referralLinkAdmin: '',
+    totalUsers: 0,
+    totalBills: 0
   };
 
   // Get all unique point of sales from merchants
@@ -82,10 +87,11 @@ const Agents: React.FC = () => {
     }
   }, [agents]);
 
-  // Filter agents
+  // Filter agents (search by name, code, or phone)
   const filteredAgents = agents.filter((agent: Agent) => {
     const matchesSearch = agent.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         agent.code?.toLowerCase().includes(searchTerm.toLowerCase());
+                         agent.code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         agent.contactPhone?.toLowerCase().includes(searchTerm.toLowerCase());
     
     const matchesStatus = statusFilter === 'all' || 
                          (statusFilter === 'active' && agent.isActive !== false) ||
@@ -130,13 +136,18 @@ const Agents: React.FC = () => {
       isActive: agent.isActive,
       assignedPointOfSales: agent.assignedPointOfSales || [],
       contactPhone: agent.contactPhone || '',
+      password: '', // Don't show existing password, user needs to enter new one if changing
       contactEmail: agent.contactEmail || '',
       address: agent.address || '',
       taxCode: agent.taxCode || '',
       bankBranch: agent.bankBranch || '',
       qrCodeBase64: agent.qrCodeBase64 || '',
       notes: agent.notes || '',
-      discountRatesByPointOfSale: agent.discountRatesByPointOfSale || {}
+      discountRatesByPointOfSale: agent.discountRatesByPointOfSale || {},
+      referralLinkUser: agent.referralLinkUser || `/user/upbill?agents=${agent.code}`,
+      referralLinkAdmin: agent.referralLinkAdmin || `/admin/reconciliation?agent=${agent.code}`,
+      totalUsers: agent.totalUsers || 0,
+      totalBills: agent.totalBills || 0
     });
     setIsModalOpen(true);
   };
@@ -158,6 +169,17 @@ const Agents: React.FC = () => {
       return;
     }
 
+    // Validate required fields: contactPhone and password
+    if (!formData.contactPhone.trim()) {
+      alert('Vui lòng nhập số điện thoại (bắt buộc)');
+      return;
+    }
+
+    if (!editingId && !formData.password.trim()) {
+      alert('Vui lòng nhập mật khẩu cho đại lý (bắt buộc)');
+      return;
+    }
+
     // Validate discount rates (0-100%)
     if (!validateDiscountRates(formData.discountRates)) {
       alert('Tỷ lệ chiết khấu phải từ 0% đến 100%');
@@ -170,31 +192,59 @@ const Agents: React.FC = () => {
       if (codeExists) {
         alert('Mã đại lý đã tồn tại. Vui lòng sử dụng mã khác.');
         return;
+    }
+
+      // Hash password if provided
+      let hashedPassword = formData.password;
+      if (formData.password.trim()) {
+        // Save password as plain text (no hashing)
+        hashedPassword = formData.password;
+      } else if (editingId) {
+        // Keep existing password if not changing
+        const existingAgent = agents.find(a => a.id === editingId);
+        hashedPassword = existingAgent?.password || '';
       }
-      
-      if (editingId) {
-        // Edit existing agent
-        await updateData(`/agents/${editingId}`, {
-          ...formData,
+
+      // Auto-generate referral links
+      const referralLinkUser = `/user/upbill?agents=${formData.code}`;
+      const referralLinkAdmin = `/admin/reconciliation?agent=${formData.code}`;
+    
+    if (editingId) {
+      // Edit existing agent
+        const updateDataObj: any = {
+        ...formData,
+          password: hashedPassword,
+          referralLinkUser,
+          referralLinkAdmin,
           discountRatesByPointOfSale: formData.discountRatesByPointOfSale || {},
-          updatedAt: FirebaseUtils.getServerTimestamp()
-        });
+        updatedAt: FirebaseUtils.getServerTimestamp()
+        };
+        // Remove password from update if not changing
+        if (!formData.password.trim()) {
+          delete updateDataObj.password;
+        }
+        await updateData(`/agents/${editingId}`, updateDataObj);
         alert('Đã cập nhật thông tin đại lý thành công!');
-      } else {
-        // Add new agent
-        const newId = FirebaseUtils.generateId();
-        await writeData(`/agents/${newId}`, {
-          ...formData,
+    } else {
+      // Add new agent
+      const newId = FirebaseUtils.generateId();
+      await writeData(`/agents/${newId}`, {
+        ...formData,
+          password: hashedPassword,
+          referralLinkUser,
+          referralLinkAdmin,
           discountRatesByPointOfSale: formData.discountRatesByPointOfSale || {},
-          createdAt: FirebaseUtils.getServerTimestamp(),
-          updatedAt: FirebaseUtils.getServerTimestamp(),
-          isActive: true
-        });
+        createdAt: FirebaseUtils.getServerTimestamp(),
+        updatedAt: FirebaseUtils.getServerTimestamp(),
+          isActive: true,
+          totalUsers: 0,
+          totalBills: 0
+      });
         alert('Đã thêm đại lý mới thành công!');
-      }
-      
-      setIsModalOpen(false);
-      setFormData(initialFormState);
+    }
+    
+    setIsModalOpen(false);
+    setFormData(initialFormState);
       setEditingId(null);
     } catch (error: any) {
       console.error('Error saving agent:', error);
@@ -262,7 +312,7 @@ const Agents: React.FC = () => {
           <input
             type="text"
             className="block w-full pl-10 pr-3 py-2 border border-slate-200 rounded-lg leading-5 bg-slate-50 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm transition-colors"
-            placeholder="Tìm kiếm theo tên hoặc mã đại lý..."
+            placeholder="Tìm kiếm theo tên, mã đại lý hoặc số điện thoại..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
@@ -319,9 +369,9 @@ const Agents: React.FC = () => {
 
                {/* Discount Rates by Point of Sale */}
                {agent.discountRatesByPointOfSale && Object.keys(agent.discountRatesByPointOfSale).length > 0 ? (
-                 <div className="bg-slate-50 rounded-lg p-4">
-                   <div className="flex items-center mb-3">
-                     <Percent className="w-4 h-4 mr-2 text-slate-500" />
+               <div className="bg-slate-50 rounded-lg p-4">
+                 <div className="flex items-center mb-3">
+                   <Percent className="w-4 h-4 mr-2 text-slate-500" />
                      <span className="text-sm font-semibold text-slate-700">Chiết khấu theo Điểm thu</span>
                    </div>
                    <div className="space-y-3">
@@ -345,15 +395,15 @@ const Agents: React.FC = () => {
                    <div className="flex items-center mb-3">
                      <Percent className="w-4 h-4 mr-2 text-slate-500" />
                      <span className="text-sm font-semibold text-slate-700">Cấu hình phí / Chiết khấu (Cũ)</span>
-                   </div>
-                   <div className="grid grid-cols-2 gap-3">
-                     {Object.entries(agent.discountRates || {}).map(([method, rate]) => (
-                       <div key={method} className="flex justify-between items-center text-sm bg-white p-2 rounded border border-slate-100">
-                         <span className="text-slate-500 text-xs truncate max-w-[100px]" title={method}>{method}</span>
-                         <span className="font-bold text-indigo-600">{rate}%</span>
-                       </div>
-                     ))}
-                   </div>
+                 </div>
+                 <div className="grid grid-cols-2 gap-3">
+                   {Object.entries(agent.discountRates || {}).map(([method, rate]) => (
+                     <div key={method} className="flex justify-between items-center text-sm bg-white p-2 rounded border border-slate-100">
+                       <span className="text-slate-500 text-xs truncate max-w-[100px]" title={method}>{method}</span>
+                       <span className="font-bold text-indigo-600">{rate}%</span>
+                     </div>
+                   ))}
+                 </div>
                    <p className="text-xs text-amber-600 mt-2">⚠️ Vui lòng cập nhật: Gán điểm thu và cấu hình chiết khấu theo từng điểm thu</p>
                  </div>
                )}
@@ -372,7 +422,7 @@ const Agents: React.FC = () => {
                        </span>
                      ))}
                    </div>
-                 </div>
+               </div>
                )}
             </div>
           </div>
@@ -451,20 +501,56 @@ const Agents: React.FC = () => {
                 </div>
               </div>
 
-              {/* Enhanced Contact Info */}
+              {/* Password Field */}
               <div className="space-y-4">
-                <h4 className="text-sm font-semibold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2">Thông tin liên hệ</h4>
+                <h4 className="text-sm font-semibold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2">Thông tin đăng nhập</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label className="text-sm font-medium text-slate-700">Số điện thoại liên hệ</label>
+                    <label className="text-sm font-medium text-slate-700">
+                      Số điện thoại <span className="text-red-500">*</span>
+                    </label>
                     <input
-                      type="text"
+                      required
+                      type="tel"
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
                       placeholder="VD: 0901234567"
                       value={formData.contactPhone}
                       onChange={e => setFormData({...formData, contactPhone: e.target.value})}
                     />
+                    <p className="text-xs text-slate-500 mt-1">
+                      Số điện thoại này dùng để đăng nhập (bắt buộc)
+                    </p>
                   </div>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium text-slate-700">
+                      Mật khẩu {!editingId && <span className="text-red-500">*</span>}
+                    </label>
+                    <input
+                      required={!editingId}
+                      type="password"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                      placeholder={editingId ? "Để trống nếu không đổi" : "Nhập mật khẩu"}
+                      value={formData.password}
+                      onChange={e => setFormData({...formData, password: e.target.value})}
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      {editingId ? 'Để trống nếu không muốn đổi mật khẩu' : 'Mật khẩu đăng nhập cho đại lý (bắt buộc)'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Enhanced Contact Info - Collapsible */}
+              <div className="space-y-4">
+                <details className="group">
+                  <summary className="cursor-pointer list-none">
+                    <div className="flex items-center justify-between text-sm font-semibold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2">
+                      <span>Thông tin liên hệ (Nhấn để mở rộng)</span>
+                      <span className="text-slate-400 group-open:rotate-180 transition-transform">▼</span>
+                    </div>
+                  </summary>
+                  <div className="pt-4 space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <label className="text-sm font-medium text-slate-700">Email</label>
                     <input
@@ -507,6 +593,7 @@ const Agents: React.FC = () => {
                   />
                 </div>
               </div>
+              </details>
 
               {/* QR Code Upload */}
               <div className="space-y-4">
@@ -666,6 +753,7 @@ const Agents: React.FC = () => {
                   </div>
                 </div>
               )}
+              </div>
 
               <div className="flex justify-end space-x-3 pt-4 border-t border-slate-100">
                 <button

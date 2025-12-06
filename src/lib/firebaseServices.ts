@@ -13,7 +13,9 @@ import type {
   Stats,
   DateFilter,
   ExportData,
-  TransactionStatus
+  TransactionStatus,
+  MerchantTransaction,
+  ReportRecord
 } from '../../types'
 import { TransactionStatus as TS } from '../../types'
 
@@ -263,14 +265,14 @@ export const DashboardService = {
   async getErrorTransactions(limit: number = 10): Promise<ReconciliationRecord[]> {
     try {
       // Try to use Firebase query for better performance
-      const snapshot = await get(ref(database, 'reconciliation_records'))
-      const records = FirebaseUtils.objectToArray(snapshot.val()) as ReconciliationRecord[]
+    const snapshot = await get(ref(database, 'reconciliation_records'))
+    const records = FirebaseUtils.objectToArray(snapshot.val()) as ReconciliationRecord[]
       
       // Filter errors and sort
-      return records
-        .filter(r => r.status !== 'MATCHED')
-        .sort((a, b) => new Date(b.processedAt).getTime() - new Date(a.processedAt).getTime())
-        .slice(0, limit)
+    return records
+      .filter(r => r.status !== 'MATCHED')
+      .sort((a, b) => new Date(b.processedAt).getTime() - new Date(a.processedAt).getTime())
+      .slice(0, limit)
     } catch (error) {
       console.warn('Error loading error transactions:', error)
       return []
@@ -471,13 +473,44 @@ export const SettingsService = {
 
   // Cập nhật cấu hình (merge với settings hiện có)
   async updateSettings(settings: Partial<AppSettings>): Promise<void> {
-    const currentSettings = await this.getSettings()
-    const updatedSettings = {
-      ...currentSettings,
-      ...settings,
-      updatedAt: FirebaseUtils.getServerTimestamp()
+    try {
+      // Try to get current settings first, but don't fail if it times out
+      let currentSettings: AppSettings | null = null;
+      try {
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('Timeout')), 3000);
+        });
+        currentSettings = await Promise.race([this.getSettings(), timeoutPromise]);
+      } catch (e) {
+        // If getSettings fails, we'll use update() instead of set() to merge
+        console.warn('Could not load current settings, using update() instead:', e);
+      }
+
+      if (currentSettings) {
+        // Merge with current settings
+        const updatedSettings = {
+          ...currentSettings,
+          ...settings,
+          updatedAt: FirebaseUtils.getServerTimestamp()
+        };
+        await set(ref(database, 'settings'), updatedSettings);
+      } else {
+        // If we couldn't load current settings, use update() to merge only the provided fields
+        const updates: any = {
+          ...settings,
+          updatedAt: FirebaseUtils.getServerTimestamp()
+        };
+        // Ensure required fields exist
+        if (!updates.companyName) updates.companyName = 'PayReconcile Pro';
+        if (!updates.timezone) updates.timezone = 'Asia/Ho_Chi_Minh';
+        if (!updates.currency) updates.currency = 'VNĐ';
+        if (!updates.dateFormat) updates.dateFormat = 'DD/MM/YYYY';
+        await update(ref(database, 'settings'), updates);
+      }
+    } catch (error) {
+      console.error('Error updating settings:', error);
+      throw error;
     }
-    await set(ref(database, 'settings'), updatedSettings)
   },
 
   // Cập nhật GEMINI API Key
@@ -977,7 +1010,123 @@ export const initializeDatabase = async () => {
       // Import mock users and seed them
       // This will be called from a component to initialize
     }
-  } catch (error) {
-    console.error('Error initializing database:', error)
+    } catch (error) {
+      console.error('Error initializing database:', error)
+    }
+  }
+
+// Merchant Transactions Service - CRUD cho merchant_transactions
+export const MerchantTransactionsService = {
+  /**
+   * Tạo merchant transaction
+   */
+  async create(transaction: Omit<MerchantTransaction, 'id' | 'createdAt'>): Promise<string> {
+    const newTransaction: Omit<MerchantTransaction, 'id'> = {
+      ...transaction,
+      createdAt: FirebaseUtils.getServerTimestamp()
+    };
+    const newRef = await push(ref(database, 'merchant_transactions'), newTransaction);
+    return newRef.key!;
+  },
+
+  /**
+   * Tạo nhiều merchant transactions cùng lúc (batch)
+   */
+  async createBatch(transactions: Array<Omit<MerchantTransaction, 'id' | 'createdAt'>>): Promise<string[]> {
+    const timestamp = FirebaseUtils.getServerTimestamp();
+    const promises = transactions.map(async (transaction) => {
+      // Remove undefined values - Firebase doesn't allow undefined
+      const cleanTransaction: any = {};
+      Object.keys(transaction).forEach(key => {
+        const value = (transaction as any)[key];
+        if (value !== undefined) {
+          cleanTransaction[key] = value;
+        }
+      });
+      
+      const newTransaction: Omit<MerchantTransaction, 'id'> = {
+        ...cleanTransaction,
+        createdAt: timestamp
+      };
+      const newRef = await push(ref(database, 'merchant_transactions'), newTransaction);
+      return newRef.key!;
+    });
+    return await Promise.all(promises);
+  },
+
+  /**
+   * Lấy merchant transaction theo ID
+   */
+  async getById(id: string): Promise<MerchantTransaction | null> {
+    const snapshot = await get(ref(database, `merchant_transactions/${id}`));
+    const data = snapshot.val();
+    if (!data) return null;
+    return { ...data, id };
+  },
+
+  /**
+   * Lấy merchant transactions theo uploadSessionId
+   */
+  async getByUploadSession(uploadSessionId: string): Promise<MerchantTransaction[]> {
+    const snapshot = await get(ref(database, 'merchant_transactions'));
+    const allTransactions = FirebaseUtils.objectToArray<MerchantTransaction>(snapshot.val() || {});
+    return allTransactions.filter(t => t.uploadSessionId === uploadSessionId);
+  },
+
+  /**
+   * Lấy merchant transactions với filter
+   */
+  async getByFilters(filters: {
+    uploadSessionId?: string;
+    merchantCode?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    transactionCode?: string;
+  }): Promise<MerchantTransaction[]> {
+    const snapshot = await get(ref(database, 'merchant_transactions'));
+    let transactions = FirebaseUtils.objectToArray<MerchantTransaction>(snapshot.val() || {});
+
+    if (filters.uploadSessionId) {
+      transactions = transactions.filter(t => t.uploadSessionId === filters.uploadSessionId);
+    }
+    if (filters.merchantCode) {
+      transactions = transactions.filter(t => t.merchantCode === filters.merchantCode);
+    }
+    if (filters.transactionCode) {
+      transactions = transactions.filter(t => t.transactionCode === filters.transactionCode);
+    }
+    if (filters.dateFrom || filters.dateTo) {
+      transactions = transactions.filter(t => {
+        const txDate = t.transactionDate.split('T')[0];
+        if (filters.dateFrom && txDate < filters.dateFrom) return false;
+        if (filters.dateTo && txDate > filters.dateTo) return false;
+        return true;
+      });
+    }
+
+    return transactions;
+  },
+
+  /**
+   * Update merchant transaction
+   */
+  async update(id: string, updates: Partial<MerchantTransaction>): Promise<void> {
+    await update(ref(database, `merchant_transactions/${id}`), updates);
+  },
+
+  /**
+   * Xóa merchant transaction
+   */
+  async delete(id: string): Promise<void> {
+    await remove(ref(database, `merchant_transactions/${id}`));
+  },
+
+  /**
+   * Xóa tất cả transactions của một upload session
+   */
+  async deleteByUploadSession(uploadSessionId: string): Promise<void> {
+    const transactions = await this.getByUploadSession(uploadSessionId);
+    const deletePromises = transactions.map(t => remove(ref(database, `merchant_transactions/${t.id}`)));
+    await Promise.all(deletePromises);
   }
 }

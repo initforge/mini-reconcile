@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, Edit2, Trash2, Building2, CreditCard, CheckCircle, XCircle, Phone, Mail, MapPin, Hash, Users, TrendingUp, DollarSign, Settings, UserCheck, Save, X, Store, ToggleLeft, ToggleRight, BarChart3, Landmark } from 'lucide-react';
+import { Search, Plus, Edit2, Trash2, Building2, CreditCard, CheckCircle, XCircle, Phone, Mail, MapPin, Hash, Users, TrendingUp, DollarSign, Settings, UserCheck, Save, X, Store, ToggleLeft, ToggleRight, Landmark } from 'lucide-react';
 import { Merchant, Agent, AgentFeeStructure } from '../types';
 import { useRealtimeData, useFirebaseWrite, FirebaseUtils } from '../src/lib/firebaseHooks';
 import { MerchantsService } from '../src/lib/firebaseServices';
@@ -13,7 +13,6 @@ const Merchants: React.FC = () => {
   
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
-  const [merchantStats, setMerchantStats] = useState<Record<string, { count: number; totalAmount: number }>>({});
   
   // Enhanced state for fee management
   const [showFeeStructure, setShowFeeStructure] = useState(false);
@@ -47,26 +46,6 @@ const Merchants: React.FC = () => {
   
   const [formData, setFormData] = useState<Omit<Merchant, 'id'>>(initialFormState);
 
-  // Load transaction stats for merchants
-  useEffect(() => {
-    const loadStats = async () => {
-      const stats: Record<string, { count: number; totalAmount: number }> = {};
-      for (const merchant of merchants) {
-        try {
-          const merchantStat = await MerchantsService.getTransactionStats((merchant as any).code || merchant.id);
-          stats[merchant.id] = merchantStat;
-        } catch (error) {
-          console.error(`Error loading stats for merchant ${merchant.id}:`, error);
-          stats[merchant.id] = { count: 0, totalAmount: 0 };
-        }
-      }
-      setMerchantStats(stats);
-    };
-    
-    if (merchants.length > 0) {
-      loadStats();
-    }
-  }, [merchants]);
 
   // Filter merchants
   const filteredMerchants = merchants.filter((merchant: Merchant) => {
@@ -327,30 +306,6 @@ const Merchants: React.FC = () => {
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
-                </div>
-              </div>
-            </div>
-            
-            {/* Thống kê giao dịch */}
-            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2">
-                  <BarChart3 className="w-4 h-4 text-slate-400" />
-                  <span className="text-sm font-medium text-slate-600">Thống kê giao dịch</span>
-                </div>
-                <div className="text-right">
-                  {merchantStats[merchant.id] ? (
-                    <>
-                      <div className="text-sm font-bold text-slate-800">
-                        {merchantStats[merchant.id].count.toLocaleString('vi-VN')} giao dịch
-                      </div>
-                      <div className="text-xs text-slate-500">
-                        {merchantStats[merchant.id].totalAmount.toLocaleString('vi-VN')} VNĐ
-                      </div>
-                    </>
-                  ) : (
-                    <div className="text-sm text-slate-400">Chưa có dữ liệu</div>
-                  )}
                 </div>
               </div>
             </div>

@@ -4,13 +4,15 @@ import { AppSettings } from '../types';
 import { SettingsService } from '../src/lib/firebaseServices';
 
 const Settings: React.FC = () => {
-  const [settings, setSettings] = useState<AppSettings>({
-    companyName: '',
+  // Initialize with default settings so UI is always usable
+  const defaultSettings: AppSettings = {
+    companyName: 'PayReconcile Pro',
     timezone: 'Asia/Ho_Chi_Minh',
     currency: 'VNĐ',
     dateFormat: 'DD/MM/YYYY'
-  });
+  };
 
+  const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
@@ -24,12 +26,51 @@ const Settings: React.FC = () => {
   const loadSettings = async () => {
     try {
       setLoading(true);
-      const currentSettings = await SettingsService.getSettings();
-      setSettings(currentSettings);
+      
+      // Try to load from localStorage first (faster)
+      try {
+        const localSettings = localStorage.getItem('appSettings');
+        if (localSettings) {
+          const parsed = JSON.parse(localSettings);
+          setSettings(parsed);
+          console.log('✅ Loaded settings from localStorage');
+        }
+      } catch (e) {
+        console.warn('Could not load from localStorage:', e);
+      }
+      
+      // Then try to load from Firebase (with timeout)
+      try {
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('Timeout: Settings load took too long')), 5000);
+        });
+
+        const settingsPromise = SettingsService.getSettings();
+        const currentSettings = await Promise.race([settingsPromise, timeoutPromise]);
+        
+        setSettings(currentSettings);
+        // Update localStorage with Firebase data
+        try {
+          localStorage.setItem('appSettings', JSON.stringify(currentSettings));
+        } catch (e) {
+          console.warn('Could not save to localStorage:', e);
+        }
+      } catch (error) {
+        console.error('Error loading settings from Firebase:', error);
+        // If Firebase fails but we have localStorage, that's fine
+        // Only show error if we don't have localStorage either
+        if (error instanceof Error && 
+            !error.message.includes('Permission denied') && 
+            !error.message.includes('Timeout')) {
+          // Only show error if it's not a known issue
+          console.warn('Using default or localStorage settings');
+        }
+      }
     } catch (error) {
       console.error('Error loading settings:', error);
-      showMessage('error', 'Có lỗi khi tải cấu hình');
+      // Settings already initialized with defaults, so UI is usable
     } finally {
+      // Always set loading to false, even on error
       setLoading(false);
     }
   };
@@ -37,7 +78,24 @@ const Settings: React.FC = () => {
   const handleSave = async () => {
     try {
       setSaving(true);
-      await SettingsService.updateSettings(settings);
+      
+      // Add timeout for save operation
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Timeout: Save operation took too long')), 10000);
+      });
+
+      await Promise.race([
+        SettingsService.updateSettings(settings),
+        timeoutPromise
+      ]);
+      
+      // Also save to localStorage as backup
+      try {
+        localStorage.setItem('appSettings', JSON.stringify(settings));
+        console.log('✅ Settings saved to localStorage as backup');
+      } catch (e) {
+        console.warn('Could not save to localStorage:', e);
+      }
       
       // Clear API key cache if geminiApiKey was updated
       if (settings.geminiApiKey) {
@@ -65,7 +123,25 @@ const Settings: React.FC = () => {
       showMessage('success', 'Đã lưu cấu hình thành công');
     } catch (error) {
       console.error('Error saving settings:', error);
-      showMessage('error', 'Có lỗi khi lưu cấu hình');
+      
+      // Try to save to localStorage as fallback
+      try {
+        localStorage.setItem('appSettings', JSON.stringify(settings));
+        console.log('✅ Settings saved to localStorage as fallback');
+        if (error instanceof Error && (error.message.includes('Permission denied') || error.message.includes('Timeout'))) {
+          showMessage('error', 'Không thể lưu lên Firebase. Đã lưu vào bộ nhớ cục bộ. Vui lòng kiểm tra quyền truy cập Firebase.');
+        } else {
+          showMessage('error', 'Đã lưu vào bộ nhớ cục bộ. Có lỗi khi lưu lên Firebase.');
+        }
+      } catch (e) {
+        if (error instanceof Error && error.message.includes('Permission denied')) {
+          showMessage('error', 'Không có quyền lưu cấu hình. Vui lòng kiểm tra quyền truy cập Firebase.');
+        } else if (error instanceof Error && error.message.includes('Timeout')) {
+          showMessage('error', 'Thao tác lưu mất quá nhiều thời gian. Vui lòng thử lại.');
+        } else {
+          showMessage('error', 'Có lỗi khi lưu cấu hình');
+        }
+      }
     } finally {
       setSaving(false);
     }

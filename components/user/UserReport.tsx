@@ -1,0 +1,175 @@
+import React, { useState, useEffect } from 'react';
+import { Clock } from 'lucide-react';
+import { ReportService } from '../../src/lib/reportServices';
+import type { ReportRecord, ReportStatus } from '../../types';
+import ReportFilters from '../shared/ReportFilters';
+import ReportTable from '../shared/ReportTable';
+import Pagination from '../Pagination';
+
+const UserReport: React.FC = () => {
+  const userAuth = localStorage.getItem('userAuth');
+  const userId = userAuth ? JSON.parse(userAuth).userId : null;
+
+  // Helper function to get today's date in YYYY-MM-DD format
+  const getTodayDate = () => {
+    const today = new Date();
+    return today.toISOString().split('T')[0];
+  };
+
+  // Filter state - default to today for display, but don't filter initially
+  const [dateFrom, setDateFrom] = useState<string>(getTodayDate());
+  const [dateTo, setDateTo] = useState<string>(getTodayDate());
+  const [dateFilterActive, setDateFilterActive] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<ReportStatus | 'all'>('all');
+  const [selectedPointOfSaleName, setSelectedPointOfSaleName] = useState<string>('all');
+  
+  // Data state
+  const [records, setRecords] = useState<ReportRecord[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const itemsPerPage = 20;
+
+  // Get unique point of sales from all report records
+  const [allPointOfSales, setAllPointOfSales] = useState<string[]>([]);
+
+  // Load all point of sales from database
+  useEffect(() => {
+    const loadPointOfSales = async () => {
+      if (!userId) return;
+      try {
+        const result = await ReportService.getReportRecords({ userId }, { limit: 10000 });
+        const posSet = new Set<string>();
+        result.records.forEach(r => {
+          if (r.pointOfSaleName) posSet.add(r.pointOfSaleName);
+          if (r.merchantPointOfSaleName) posSet.add(r.merchantPointOfSaleName);
+        });
+        setAllPointOfSales(Array.from(posSet).sort());
+      } catch (error) {
+        console.error('Error loading point of sales:', error);
+      }
+    };
+    loadPointOfSales();
+  }, [userId]);
+
+  // Get unique point of sales from current filtered records
+  const availablePointOfSales = React.useMemo(() => {
+    const posSet = new Set<string>(allPointOfSales);
+    records.forEach(r => {
+      if (r.pointOfSaleName) posSet.add(r.pointOfSaleName);
+      if (r.merchantPointOfSaleName) posSet.add(r.merchantPointOfSaleName);
+    });
+    return Array.from(posSet).sort();
+  }, [records, allPointOfSales]);
+
+  // Load reports
+  useEffect(() => {
+    if (!userId) return;
+    loadReports();
+  }, [userId, dateFrom, dateTo, dateFilterActive, statusFilter, selectedPointOfSaleName, currentPage]);
+
+  const loadReports = async () => {
+    if (!userId) return;
+    
+    setLoading(true);
+    try {
+      const filters = {
+        userId,
+        status: statusFilter !== 'all' ? statusFilter : undefined,
+        pointOfSaleName: selectedPointOfSaleName !== 'all' ? selectedPointOfSaleName : undefined,
+        dateFrom: dateFilterActive ? dateFrom : undefined,
+        dateTo: dateFilterActive ? dateTo : undefined
+      };
+      
+      const result = await ReportService.getReportRecords(filters, {
+        limit: itemsPerPage,
+        cursor: currentPage > 1 ? records[records.length - 1]?.id : undefined
+      });
+      
+      setRecords(result.records);
+      setTotalRecords(result.total || 0);
+    } catch (error) {
+      console.error('Error loading reports:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClearFilters = () => {
+    setDateFrom(getTodayDate());
+    setDateTo(getTodayDate());
+    setDateFilterActive(false);
+    setStatusFilter('all');
+    setSelectedPointOfSaleName('all');
+    setCurrentPage(1);
+  };
+
+  const handleFilterChange = (newFilters: {
+    dateFrom: string;
+    dateTo: string;
+    status: ReportStatus | 'all';
+    agentId?: string;
+    userId?: string;
+    pointOfSaleName?: string;
+  }) => {
+    const today = getTodayDate();
+    const datesChanged = newFilters.dateFrom !== today || newFilters.dateTo !== today;
+    
+    setDateFrom(newFilters.dateFrom);
+    setDateTo(newFilters.dateTo);
+    setDateFilterActive(datesChanged);
+    setStatusFilter(newFilters.status);
+    setSelectedPointOfSaleName(newFilters.pointOfSaleName || 'all');
+    setCurrentPage(1);
+  };
+
+  const totalPages = Math.ceil(totalRecords / itemsPerPage);
+
+  return (
+    <div className="space-y-6">
+      <ReportFilters
+        role="USER"
+        filters={{
+          dateFrom,
+          dateTo,
+          status: statusFilter,
+          pointOfSaleName: selectedPointOfSaleName !== 'all' ? selectedPointOfSaleName : undefined
+        }}
+        pointOfSales={availablePointOfSales}
+        onChange={handleFilterChange}
+        onClear={handleClearFilters}
+      />
+
+      {loading ? (
+        <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-12 text-center">
+          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+          <p className="mt-4 text-slate-500">Đang tải dữ liệu...</p>
+        </div>
+      ) : (
+        <>
+          <ReportTable
+            role="USER"
+            records={records}
+            pagination={totalPages > 1 ? {
+              currentPage,
+              totalPages,
+              onPageChange: setCurrentPage
+            } : undefined}
+          />
+          {totalPages > 1 && (
+            <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6">
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={setCurrentPage}
+              />
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
+
+export default UserReport;
+
