@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Search, Users, Plus, Edit2, Trash2, Eye, X, Save, Phone, Mail, User as UserIcon } from 'lucide-react';
 import { UserService } from '../../src/lib/userServices';
 import { useRealtimeData, FirebaseUtils, useFirebaseWrite } from '../../src/lib/firebaseHooks';
+import { DeletionService } from '../../src/lib/deletionService';
+import DeleteConfirmModal from '../shared/DeleteConfirmModal';
 import type { User } from '../../types';
 
 const PersonnelManagement: React.FC = () => {
@@ -9,6 +11,8 @@ const PersonnelManagement: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [viewingId, setViewingId] = useState<string | null>(null);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deletingUser, setDeletingUser] = useState<{ id: string; name: string } | null>(null);
   const { writeData, updateData, deleteData } = useFirebaseWrite();
 
   const { data: usersData } = useRealtimeData<Record<string, User>>('/users');
@@ -23,8 +27,11 @@ const PersonnelManagement: React.FC = () => {
     qrCodeBase64: ''
   });
 
-  // Filter users by search term (name or phone)
+  // Filter users by search term (name or phone) - exclude deleted users
   const filteredUsers = allUsers.filter(user => {
+    // Exclude soft-deleted users
+    if (user.deleted) return false;
+    
     const lowerSearch = searchTerm.toLowerCase();
     return (
       user.fullName?.toLowerCase().includes(lowerSearch) ||
@@ -69,14 +76,31 @@ const PersonnelManagement: React.FC = () => {
     setViewingId(user.id);
   };
 
-  const handleDelete = async (userId: string) => {
-    if (window.confirm('Bạn có chắc chắn muốn xóa khách hàng này?')) {
-      try {
-        await deleteData(`/users/${userId}`);
-        alert('Đã xóa khách hàng thành công');
-      } catch (error) {
-        alert('Có lỗi khi xóa khách hàng');
+  const handleDelete = (user: User) => {
+    setDeletingUser({ id: user.id, name: user.fullName || user.phone });
+    setDeleteModalOpen(true);
+  };
+
+  const handleConfirmDelete = async (deleteType: 'cascade' | 'soft') => {
+    if (!deletingUser) return;
+
+    try {
+      let result;
+      if (deleteType === 'cascade') {
+        result = await DeletionService.cascadeDeleteUser(deletingUser.id);
+      } else {
+        result = await DeletionService.softDeleteUser(deletingUser.id);
       }
+
+      if (result.success) {
+        alert(result.message);
+        setDeleteModalOpen(false);
+        setDeletingUser(null);
+      } else {
+        alert(`Lỗi: ${result.message}`);
+      }
+    } catch (error: any) {
+      alert(`Lỗi khi xóa: ${error.message}`);
     }
   };
 
@@ -206,7 +230,7 @@ const PersonnelManagement: React.FC = () => {
                               <Edit2 className="w-4 h-4" />
                             </button>
                             <button
-                              onClick={() => handleDelete(user.id)}
+                              onClick={() => handleDelete(user)}
                               className="text-red-600 hover:text-red-900"
                               title="Xóa"
                             >
@@ -387,6 +411,21 @@ const PersonnelManagement: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deletingUser && (
+        <DeleteConfirmModal
+          isOpen={deleteModalOpen}
+          onClose={() => {
+            setDeleteModalOpen(false);
+            setDeletingUser(null);
+          }}
+          onConfirm={handleConfirmDelete}
+          entityType="user"
+          entityName={deletingUser.name}
+          entityId={deletingUser.id}
+        />
       )}
     </div>
   );

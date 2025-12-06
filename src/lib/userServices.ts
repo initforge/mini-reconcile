@@ -104,11 +104,12 @@ export const UserService = {
   },
 
   /**
-   * Get all users (for admin)
+   * Get all users (for admin) - exclude deleted users
    */
   async getAllUsers(): Promise<User[]> {
     const snapshot = await get(ref(database, 'users'));
-    return FirebaseUtils.objectToArray<User>(snapshot.val() || {});
+    const allUsers = FirebaseUtils.objectToArray<User>(snapshot.val() || {});
+    return allUsers.filter(user => !user.deleted); // Exclude soft-deleted users
   },
 
   /**

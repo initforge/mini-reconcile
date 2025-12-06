@@ -48,7 +48,7 @@ const PlaceholderView = ({ title, icon: Icon, desc }: any) => (
 // Protected Route Component for Admin
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const isAuthenticated = localStorage.getItem('mockAuth') === 'true';
-  return isAuthenticated ? <>{children}</> : <Navigate to="/admin/login" replace />;
+  return isAuthenticated ? <>{children}</> : <Navigate to="/admin" replace />;
 };
 
 // Protected Route Component for User
@@ -84,7 +84,7 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const handleLogout = () => {
     console.log('🚪 Mock logout triggered');
     localStorage.removeItem('mockAuth');
-    window.location.href = '/admin/login';
+    window.location.href = '/admin';
   };
 
   return (
@@ -132,7 +132,7 @@ function App() {
   const handleLogin = () => {
     console.log('🔐 Mock login triggered');
     localStorage.setItem('mockAuth', 'true');
-    window.location.href = '/reconciliation';
+    window.location.href = '/reconciliation'; // Redirect to admin main management page
   };
 
   return (
@@ -141,9 +141,21 @@ function App() {
         {/* Homepage */}
         <Route path="/" element={<HomePage />} />
         
+        {/* Admin Report Route (must be before /admin route to avoid conflict) */}
+        <Route 
+          path="/admin/report" 
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <AdminReport />
+              </AppLayout>
+            </ProtectedRoute>
+          } 
+        />
+        
         {/* Admin Login Route (Private) */}
         <Route 
-          path="/admin/login" 
+          path="/admin" 
           element={<Login onLogin={handleLogin} />} 
         />
         
@@ -220,17 +232,6 @@ function App() {
             <ProtectedRoute>
               <AppLayout>
                 <Settings />
-              </AppLayout>
-            </ProtectedRoute>
-          } 
-        />
-        
-        <Route 
-          path="/admin/report" 
-          element={
-            <ProtectedRoute>
-              <AppLayout>
-                <AdminReport />
               </AppLayout>
             </ProtectedRoute>
           } 

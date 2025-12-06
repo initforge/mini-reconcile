@@ -37,6 +37,8 @@ export interface User {
   qrCodeBase64?: string; // QR thanh toán của user
   createdAt: string;
   lastActive: string;
+  deleted?: boolean; // Soft delete flag
+  deletedAt?: string; // ISO timestamp when deleted
 }
 
 // Admin User - Nhân viên admin (giữ nguyên cho backward compatibility)
@@ -93,6 +95,8 @@ export interface Agent {
   isActive?: boolean;
   createdAt?: string;
   updatedAt?: string;
+  deleted?: boolean; // Soft delete flag
+  deletedAt?: string; // ISO timestamp when deleted
   // Enhanced fields
   assignedMerchants?: string[]; // Danh sách merchant ID được phép sử dụng
   contactPhone: string; // SỐ ĐIỆN THOẠI - dùng để login (REQUIRED)

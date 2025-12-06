@@ -4,6 +4,8 @@ import { Plus, Search, Edit2, Trash2, Save, X, Percent, Building, CreditCard, Ba
 import { Agent, Merchant, PaymentMethod } from '../types';
 import { useRealtimeData, useFirebaseWrite, FirebaseUtils } from '../src/lib/firebaseHooks';
 import { AgentsService } from '../src/lib/firebaseServices';
+import { DeletionService } from '../src/lib/deletionService';
+import DeleteConfirmModal from './shared/DeleteConfirmModal';
 
 const Agents: React.FC = () => {
   // Firebase hooks
@@ -21,9 +23,12 @@ const Agents: React.FC = () => {
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deletingAgent, setDeletingAgent] = useState<{ id: string; name: string } | null>(null);
   
-  // Convert Firebase object to array
-  const agents = FirebaseUtils.objectToArray(agentsData || {});
+  // Convert Firebase object to array - exclude deleted agents
+  const allAgents = FirebaseUtils.objectToArray(agentsData || {});
+  const agents = allAgents.filter(agent => !agent.deleted); // Exclude soft-deleted agents
   const merchants = FirebaseUtils.objectToArray(merchantsData || {});
   
   // Form State - enhanced with new fields
@@ -152,9 +157,31 @@ const Agents: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const handleDelete = async (id: string) => {
-    if (window.confirm('Bạn có chắc chắn muốn xóa đại lý này?')) {
-      await deleteData(`/agents/${id}`);
+  const handleDelete = (agent: Agent) => {
+    setDeletingAgent({ id: agent.id, name: agent.name });
+    setDeleteModalOpen(true);
+  };
+
+  const handleConfirmDelete = async (deleteType: 'cascade' | 'soft') => {
+    if (!deletingAgent) return;
+
+    try {
+      let result;
+      if (deleteType === 'cascade') {
+        result = await DeletionService.cascadeDeleteAgent(deletingAgent.id);
+      } else {
+        result = await DeletionService.softDeleteAgent(deletingAgent.id);
+      }
+
+      if (result.success) {
+        alert(result.message);
+        setDeleteModalOpen(false);
+        setDeletingAgent(null);
+      } else {
+        alert(`Lỗi: ${result.message}`);
+      }
+    } catch (error: any) {
+      alert(`Lỗi khi xóa: ${error.message}`);
     }
   };
 
@@ -349,7 +376,7 @@ const Agents: React.FC = () => {
                     <Edit2 className="w-4 h-4" />
                   </button>
                   <button 
-                    onClick={() => handleDelete(agent.id)}
+                    onClick={() => handleDelete(agent)}
                     className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -774,6 +801,21 @@ const Agents: React.FC = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deletingAgent && (
+        <DeleteConfirmModal
+          isOpen={deleteModalOpen}
+          onClose={() => {
+            setDeleteModalOpen(false);
+            setDeletingAgent(null);
+          }}
+          onConfirm={handleConfirmDelete}
+          entityType="agent"
+          entityName={deletingAgent.name}
+          entityId={deletingAgent.id}
+        />
       )}
     </div>
   );

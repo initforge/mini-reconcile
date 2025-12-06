@@ -117,8 +117,9 @@ export const loginUser = async (phone: string, password: string): Promise<User |
     const input = phone.trim();
     
     // Find user by phone (exact match, case-sensitive để khớp "x" và "X")
+    // Exclude deleted users
     const user = users.find(u => {
-      return u.phone && u.phone.trim() === input;
+      return u.phone && !u.deleted && u.phone.trim() === input;
     });
     
     if (!user) {
@@ -161,7 +162,8 @@ export const loginAgent = async (phone: string, password: string): Promise<Agent
     const agents = FirebaseUtils.objectToArray<Agent>(snapshot.val() || {});
     console.log('📊 Total agents found:', agents.length);
     
-    const agent = agents.find(a => a.contactPhone === phone && a.isActive !== false);
+    // Exclude deleted agents
+    const agent = agents.find(a => a.contactPhone === phone && a.isActive !== false && !a.deleted);
     if (!agent) {
       console.log('❌ Agent not found or inactive for phone:', phone);
       return null;
@@ -232,8 +234,9 @@ export const registerUser = async (
     }
     
     // Exact match check for existing phone (case-sensitive để khớp "x" và "X")
+    // Exclude deleted users
     const phoneExists = users.some(u => {
-      if (!u.phone) return false;
+      if (!u.phone || u.deleted) return false;
       return u.phone.trim() === phone.trim();
     });
     

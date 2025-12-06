@@ -4,6 +4,7 @@ import { Upload, Image as ImageIcon, CheckCircle, AlertCircle, X, Loader, Refres
 import { extractTransactionFromImage } from '../../services/geminiService';
 import { UserService } from '../../src/lib/userServices';
 import { useRealtimeData, FirebaseUtils } from '../../src/lib/firebaseHooks';
+import DuplicateBillsModal, { type DuplicateBill } from '../shared/DuplicateBillsModal';
 import type { Agent, PaymentMethod } from '../../types';
 
 type BillPreview = {
@@ -45,6 +46,9 @@ const UploadBill: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [uploadProgress, setUploadProgress] = useState<{ total: number; completed: number }>({ total: 0, completed: 0 });
+  const [duplicateModalOpen, setDuplicateModalOpen] = useState(false);
+  const [duplicateBills, setDuplicateBills] = useState<DuplicateBill[]>([]);
+  const [validBillsForUpload, setValidBillsForUpload] = useState<BillPreview[]>([]);
 
   useEffect(() => {
     if (!userId) {
@@ -289,7 +293,7 @@ const UploadBill: React.FC = () => {
     // OCR will auto-trigger via useEffect when billPreviews updates
   };
 
-  const handleUpload = async () => {
+  const handleUpload = async (skipDuplicateCheck = false) => {
     // Filter out images that are still processing or have errors
     const readyBills = billPreviews.filter(p => p.ocrStatus === 'done' && p.ocrResult);
     const processingBills = billPreviews.filter(p => p.ocrStatus === 'processing');
@@ -311,11 +315,73 @@ const UploadBill: React.FC = () => {
       return;
     }
 
+    // Check for duplicates before uploading (unless we're already skipping duplicates)
+    if (!skipDuplicateCheck) {
+      setIsUploading(true); // Show loading while checking duplicates
+      setErrorMessage('');
+      
+      const duplicateBillsList: DuplicateBill[] = [];
+      const validBills: BillPreview[] = [];
+
+      // Check each bill for duplicates
+      for (const preview of readyBills) {
+        const ocrResult = preview.ocrResult!;
+        try {
+          const isDuplicate = await UserService.checkTransactionCodeExists(ocrResult.transactionCode);
+          
+          if (isDuplicate) {
+            duplicateBillsList.push({
+              fileName: preview.file.name,
+              transactionCode: ocrResult.transactionCode
+            });
+          } else {
+            validBills.push(preview);
+          }
+        } catch (error: any) {
+          console.error('Error checking duplicate for bill:', preview.file.name, error);
+          // If error checking, treat as valid to avoid blocking upload
+          validBills.push(preview);
+        }
+      }
+
+      setIsUploading(false); // Hide loading
+
+      // If there are duplicates, show modal
+      if (duplicateBillsList.length > 0) {
+        console.log('🔍 Duplicate check completed:');
+        console.log('   - Duplicate bills:', duplicateBillsList.length);
+        console.log('   - Valid bills:', validBills.length);
+        console.log('   - Duplicate details:', duplicateBillsList);
+        
+        // Set state for modal
+        setDuplicateBills(duplicateBillsList);
+        setValidBillsForUpload(validBills);
+        
+        // Force modal to show
+        setTimeout(() => {
+          setDuplicateModalOpen(true);
+          console.log('✅ Duplicate modal should be open now');
+        }, 100);
+        
+        return;
+      }
+    }
+
+    // Use valid bills if we're skipping duplicates, otherwise use all ready bills
+    const billsToUpload = skipDuplicateCheck ? validBillsForUpload : readyBills;
+
+    if (billsToUpload.length === 0) {
+      setErrorMessage('Không có bill nào hợp lệ để upload');
+      setDuplicateModalOpen(false);
+      return;
+    }
+
     setIsUploading(true);
     setErrorMessage('');
     setSuccessMessage('');
     setUploadStatus('idle');
-    setUploadProgress({ total: readyBills.length, completed: 0 });
+    setUploadProgress({ total: billsToUpload.length, completed: 0 });
+    setDuplicateModalOpen(false);
 
     let successCount = 0;
     let errorCount = 0;
@@ -326,9 +392,9 @@ const UploadBill: React.FC = () => {
       const uploadSessionId = `USER_UPLOAD_${Date.now()}_${userId.substring(0, 8)}`;
       
       // Process each bill using pre-extracted OCR data (single source of truth)
-      for (let i = 0; i < readyBills.length; i++) {
-        const preview = readyBills[i];
-        const ocrResult = preview.ocrResult!; // Already checked above
+      for (let i = 0; i < billsToUpload.length; i++) {
+        const preview = billsToUpload[i];
+        const ocrResult = preview.ocrResult!;
         
         try {
           // Convert object URL to base64 for storage
@@ -338,10 +404,12 @@ const UploadBill: React.FC = () => {
             reader.readAsDataURL(preview.file);
           });
 
-          // Check duplicate transaction code globally
-          const isDuplicate = await UserService.checkTransactionCodeExists(ocrResult.transactionCode);
-          if (isDuplicate) {
-            throw new Error(`File ${preview.file.name}: Mã giao dịch ${ocrResult.transactionCode} đã tồn tại`);
+          // Double-check duplicate (in case something changed)
+          if (!skipDuplicateCheck) {
+            const isDuplicate = await UserService.checkTransactionCodeExists(ocrResult.transactionCode);
+            if (isDuplicate) {
+              throw new Error(`Mã giao dịch ${ocrResult.transactionCode} đã tồn tại`);
+            }
           }
 
           // Create user bill with session ID
@@ -358,7 +426,7 @@ const UploadBill: React.FC = () => {
             invoiceNumber: ocrResult.invoiceNumber,
             status: 'PENDING' as const,
             isPaidByAgent: false,
-            uploadSessionId, // Link all bills in this batch to the same session
+            uploadSessionId,
             createdAt: FirebaseUtils.getServerTimestamp()
           };
 
@@ -369,30 +437,59 @@ const UploadBill: React.FC = () => {
           errors.push(error.message || `File ${preview.file.name}: Lỗi không xác định`);
         }
 
-        setUploadProgress({ total: readyBills.length, completed: i + 1 });
+        setUploadProgress({ total: billsToUpload.length, completed: i + 1 });
       }
 
       // Show results
       if (successCount > 0) {
         setUploadStatus('success');
-        setSuccessMessage(`Đã upload thành công ${successCount}/${readyBills.length} bill${successCount > 1 ? 's' : ''}`);
+        setSuccessMessage(`Đã upload thành công ${successCount}/${billsToUpload.length} bill${successCount > 1 ? 's' : ''}`);
       }
 
       if (errorCount > 0) {
         setErrorMessage(`Có ${errorCount} file lỗi:\n${errors.join('\n')}`);
       }
 
-      // Reset form if all successful
-      if (errorCount === 0) {
-        // Cleanup object URLs before clearing
-        billPreviews.forEach(preview => {
-          if (preview.objectUrl && preview.objectUrl.startsWith('blob:')) {
-            URL.revokeObjectURL(preview.objectUrl);
-          }
+      // Remove uploaded bills from preview (keep duplicates and errors)
+      if (successCount > 0) {
+        setBillPreviews(prev => {
+          const uploadedTransactionCodes = new Set(
+            billsToUpload
+              .filter((_, idx) => {
+                // Find if this bill was successfully uploaded (by checking if not in errors)
+                const preview = billsToUpload[idx];
+                const errorIndex = errors.findIndex(e => e.includes(preview.file.name));
+                return errorIndex === -1;
+              })
+              .map(p => p.ocrResult!.transactionCode)
+          );
+
+          const remaining = prev.filter(p => {
+            if (p.ocrStatus === 'done' && p.ocrResult) {
+              return !uploadedTransactionCodes.has(p.ocrResult.transactionCode);
+            }
+            return true; // Keep processing/error bills
+          });
+
+          // Cleanup object URLs of uploaded bills
+          prev.forEach(preview => {
+            if (preview.ocrStatus === 'done' && preview.ocrResult) {
+              if (uploadedTransactionCodes.has(preview.ocrResult.transactionCode)) {
+                if (preview.objectUrl && preview.objectUrl.startsWith('blob:')) {
+                  URL.revokeObjectURL(preview.objectUrl);
+                }
+              }
+            }
+          });
+
+          return remaining;
         });
-        setBillPreviews([]);
-        if (document.getElementById('file-input') as HTMLInputElement) {
-          (document.getElementById('file-input') as HTMLInputElement).value = '';
+
+        // Clear file input if all bills uploaded
+        if (billPreviews.filter(p => p.ocrStatus === 'done' && p.ocrResult).length === 0) {
+          if (document.getElementById('file-input') as HTMLInputElement) {
+            (document.getElementById('file-input') as HTMLInputElement).value = '';
+          }
         }
       }
     } catch (error: any) {
@@ -671,6 +768,15 @@ const UploadBill: React.FC = () => {
           <li>Hệ thống sẽ tự động nhận diện loại bill và trích xuất thông tin</li>
         </ul>
       </div>
+
+      {/* Duplicate Bills Modal */}
+      <DuplicateBillsModal
+        isOpen={duplicateModalOpen}
+        onClose={() => setDuplicateModalOpen(false)}
+        onContinue={() => handleUpload(true)}
+        duplicateBills={duplicateBills}
+        validBillsCount={validBillsForUpload.length}
+      />
     </div>
   );
 };
