@@ -104,6 +104,17 @@ export const UserService = {
   },
 
   /**
+   * Find bill by transaction code (returns the bill if exists)
+   */
+  async findBillByTransactionCode(transactionCode: string): Promise<UserBill | null> {
+    const snapshot = await get(ref(database, 'user_bills'));
+    const bills = FirebaseUtils.objectToArray<UserBill>(snapshot.val() || {});
+    
+    const foundBill = bills.find(bill => bill.transactionCode === transactionCode);
+    return foundBill || null;
+  },
+
+  /**
    * Get all users (for admin) - exclude deleted users
    */
   async getAllUsers(): Promise<User[]> {

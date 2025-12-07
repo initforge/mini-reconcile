@@ -20,7 +20,13 @@ const AgentUtilities: React.FC = () => {
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  const userLink = agent?.referralLinkUser || (agent ? `/user/upbill?agents=${agent.code}` : '');
+  // Generate full URL for user link
+  const baseUrl = 'https://mini-reconcile.vercel.app';
+  const userLink = agent?.referralLinkUser 
+    ? (agent.referralLinkUser.startsWith('http') 
+        ? agent.referralLinkUser 
+        : `${baseUrl}${agent.referralLinkUser.startsWith('/') ? '' : '/'}${agent.referralLinkUser}`)
+    : (agent ? `${baseUrl}/user/upbill?agent=${agent.code}` : '');
 
   const copyToClipboard = async (text: string) => {
     try {

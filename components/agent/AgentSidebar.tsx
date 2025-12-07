@@ -1,6 +1,8 @@
 import React from 'react';
 import { FileText, CreditCard, Settings, LogOut } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { useRealtimeData, FirebaseUtils } from '../../src/lib/firebaseHooks';
+import type { Agent } from '../../types';
 
 interface AgentSidebarProps {
   activeTab: string;
@@ -10,6 +12,14 @@ interface AgentSidebarProps {
 const AgentSidebar: React.FC<AgentSidebarProps> = ({ activeTab, onLogout }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  
+  // Get agent info from localStorage
+  const agentAuth = localStorage.getItem('agentAuth');
+  const agentId = agentAuth ? JSON.parse(agentAuth).agentId : null;
+  
+  // Load agent data from Firebase
+  const { data: agentsData } = useRealtimeData<Record<string, Agent>>('/agents');
+  const agent = agentsData && agentId ? agentsData[agentId] : null;
 
   const menuItems = [
     { id: 'report', label: 'Báo cáo', icon: FileText, path: '/agent/report' },
@@ -25,8 +35,8 @@ const AgentSidebar: React.FC<AgentSidebarProps> = ({ activeTab, onLogout }) => {
             <span className="text-xl font-bold">P</span>
           </div>
           <div>
-            <h1 className="text-xl font-bold">PayReconcile</h1>
-            <p className="text-xs text-slate-400">Đại lý</p>
+            <h1 className="text-xl font-bold">{agent?.name || 'PayReconcile'}</h1>
+            <p className="text-xs text-slate-400">{agent?.code ? `Đại lý - ${agent.code}` : 'Đại lý'}</p>
           </div>
         </div>
       </div>
@@ -54,6 +64,17 @@ const AgentSidebar: React.FC<AgentSidebarProps> = ({ activeTab, onLogout }) => {
       </nav>
 
       <div className="p-4 border-t border-slate-700/50">
+        {agent && (
+          <div className="flex items-center space-x-3 px-3 py-2 mb-3 rounded-lg bg-slate-700/30">
+            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-400 to-indigo-600 flex items-center justify-center text-xs font-bold text-white shadow-md">
+              {agent.name.charAt(0).toUpperCase()}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-white truncate">{agent.name}</p>
+              <p className="text-xs text-slate-400 truncate">{agent.code}</p>
+            </div>
+          </div>
+        )}
         <button
           onClick={onLogout}
           className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-slate-300 hover:bg-red-600/20 hover:text-red-300 transition-all duration-200"

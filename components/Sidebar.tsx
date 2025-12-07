@@ -12,9 +12,11 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout }) => {
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [adminName, setAdminName] = useState<string>('Admin User');
 
   useEffect(() => {
     loadSettings();
+    loadAdminInfo();
     
     // Listen for settings changes (reload every 30 seconds)
     const interval = setInterval(() => {
@@ -23,6 +25,18 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout }) => {
     
     return () => clearInterval(interval);
   }, []);
+
+  const loadAdminInfo = () => {
+    try {
+      const adminAuth = localStorage.getItem('adminAuth');
+      if (adminAuth) {
+        const adminInfo = JSON.parse(adminAuth);
+        setAdminName(adminInfo.fullName || adminInfo.username || 'Admin User');
+      }
+    } catch (error) {
+      console.error('Error loading admin info:', error);
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -97,7 +111,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout }) => {
         <div className="flex items-center space-x-3 px-3 py-2 mb-3 rounded-lg bg-slate-700/30">
           <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-400 to-indigo-600 flex items-center justify-center text-xs font-bold text-white shadow-md">AD</div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-white truncate">Admin User</p>
+            <p className="text-sm font-semibold text-white truncate">{adminName}</p>
             <p className="text-xs text-slate-400 truncate">Super Administrator</p>
           </div>
         </div>

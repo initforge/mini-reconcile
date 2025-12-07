@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Calendar, Filter, Plus, Edit, Trash2, X, Save, AlertCircle, CheckCircle, Clock } from 'lucide-react';
 import { UserService } from '../../src/lib/userServices';
 import { useRealtimeData, FirebaseUtils } from '../../src/lib/firebaseHooks';
 import { PaymentMethod } from '../../types';
-import type { UserBill, Agent, UserBillSession } from '../../types';
+import type { UserBill, Agent, UserBillSession, ReportRecord } from '../../types';
 
 const BillHistory: React.FC = () => {
   const userAuth = localStorage.getItem('userAuth');
@@ -11,9 +11,30 @@ const BillHistory: React.FC = () => {
 
   const { data: billsData } = useRealtimeData<Record<string, UserBill>>('/user_bills');
   const { data: agentsData } = useRealtimeData<Record<string, Agent>>('/agents');
+  const { data: reportRecordsData } = useRealtimeData<Record<string, ReportRecord>>('/report_records');
   
   const agents = FirebaseUtils.objectToArray(agentsData || {});
   const allBills = FirebaseUtils.objectToArray(billsData || {});
+  
+  // Filter agents that have bills for this user
+  const agentsWithBills = useMemo(() => {
+    if (!userId) return [];
+    return agents.filter(agent => {
+      return allBills.some(bill => bill.agentId === agent.id && bill.userId === userId);
+    });
+  }, [agents, allBills, userId]);
+  
+  // Map billId -> ReportRecord để check status đối soát
+  const reportRecordsByBillId = useMemo(() => {
+    const records = FirebaseUtils.objectToArray(reportRecordsData || {});
+    const map: Record<string, ReportRecord> = {};
+    records.forEach((record: ReportRecord) => {
+      if (record.userBillId) {
+        map[record.userBillId] = record;
+      }
+    });
+    return map;
+  }, [reportRecordsData]);
 
   // Helper function to get today's date in YYYY-MM-DD format
   const getTodayDate = () => {
@@ -131,10 +152,28 @@ const BillHistory: React.FC = () => {
     });
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
+  const getStatusBadge = (bill: UserBill) => {
+    // Check từ report_records trước (source of truth cho đối soát)
+    const reportRecord = reportRecordsByBillId[bill.id];
+    
+    if (reportRecord) {
+      // Có ReportRecord = đã được đối soát
+      switch (reportRecord.status) {
+        case 'MATCHED':
+          return <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">Đã đối soát</span>;
+        case 'ERROR':
+          return <span className="px-2 py-1 bg-red-100 text-red-800 rounded-full text-xs font-medium">Lỗi đối soát</span>;
+        case 'UNMATCHED':
+          return <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded-full text-xs font-medium">Chưa khớp</span>;
+        default:
+          return <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded-full text-xs font-medium">Chờ đối soát</span>;
+      }
+    }
+    
+    // Fallback về bill.status nếu chưa có ReportRecord
+    switch (bill.status) {
       case 'MATCHED':
-        return <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">Khớp</span>;
+        return <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">Đã đối soát</span>;
       case 'ERROR':
         return <span className="px-2 py-1 bg-red-100 text-red-800 rounded-full text-xs font-medium">Lỗi</span>;
       case 'PENDING':
@@ -144,10 +183,15 @@ const BillHistory: React.FC = () => {
   };
 
   const isBillLocked = (bill: UserBill): boolean => {
-    // Khóa sửa/xóa nếu:
-    // 1. Bill đã khớp (MATCHED)
-    // 2. Bill có lỗi nhưng đã có merchantData (đã được đối soát)
-    // 3. Bill đã được thanh toán
+    // Check từ report_records trước (source of truth)
+    const reportRecord = reportRecordsByBillId[bill.id];
+    
+    if (reportRecord) {
+      // Có ReportRecord = đã được đối soát, khóa sửa/xóa
+      return true;
+    }
+    
+    // Fallback về logic cũ
     return bill.status === 'MATCHED' || 
            bill.isPaidByAgent === true || 
            (bill.status === 'ERROR' && bill.merchantData !== undefined) ||
@@ -334,7 +378,7 @@ const BillHistory: React.FC = () => {
               className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
             >
               <option value="all">Tất cả đại lý</option>
-              {agents.map(agent => (
+              {agentsWithBills.map(agent => (
                 <option key={agent.id} value={agent.id}>{agent.name} ({agent.code})</option>
               ))}
             </select>
@@ -503,7 +547,7 @@ const BillHistory: React.FC = () => {
                             {bill.pointOfSaleName || '-'}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
-                            {getStatusBadge(bill.status)}
+                            {getStatusBadge(bill)}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm">
                             <div className="flex items-center space-x-2">

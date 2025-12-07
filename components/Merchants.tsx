@@ -40,8 +40,7 @@ const Merchants: React.FC = () => {
     notes: '',
     // Point of sale fields
     branchName: '',
-    pointOfSaleName: '',
-    pointOfSaleCode: ''
+    pointOfSaleName: ''
   };
   
   const [formData, setFormData] = useState<Omit<Merchant, 'id'>>(initialFormState);
@@ -95,6 +94,25 @@ const Merchants: React.FC = () => {
   };
 
   const handleDelete = async (id: string) => {
+    const merchant = merchants.find((m: Merchant) => m.id === id);
+    if (!merchant) return;
+
+    // Check if this point of sale is assigned to any agent
+    const agents = FirebaseUtils.objectToArray(agentsData || {});
+    const assignedAgents = agents.filter((agent: Agent) => {
+      if (!agent.discountRatesByPointOfSale) return false;
+      // Check if merchant's pointOfSaleName is in any agent's discountRatesByPointOfSale
+      return Object.keys(agent.discountRatesByPointOfSale).some(
+        posName => posName === merchant.pointOfSaleName
+      );
+    });
+
+    if (assignedAgents.length > 0) {
+      const agentNames = assignedAgents.map((a: Agent) => a.name || a.code).join(', ');
+      alert(`Không thể xóa điểm bán này vì đã được gán cho đại lý: ${agentNames}\n\nVui lòng hủy gán điểm bán khỏi các đại lý trước khi xóa.`);
+      return;
+    }
+
     if (window.confirm('Bạn có chắc chắn muốn xóa điểm bán này? Dữ liệu đối soát liên quan có thể bị ảnh hưởng.')) {
       try {
         await MerchantsService.delete(id);
@@ -359,7 +377,7 @@ const Merchants: React.FC = () => {
 
 
                {/* Point of Sale Info */}
-               {(merchant.branchName || merchant.pointOfSaleName || merchant.pointOfSaleCode) && (
+               {(merchant.branchName || merchant.pointOfSaleName) && (
                  <div>
                    <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Thông tin Điểm thu</h4>
                    <div className="space-y-2 bg-slate-50 rounded-lg p-4 border border-slate-100">
@@ -378,15 +396,6 @@ const Merchants: React.FC = () => {
                          <div className="flex-1">
                            <span className="text-xs text-slate-500 block">Tên Điểm thu</span>
                            <span className="font-mono font-medium text-slate-800">{merchant.pointOfSaleName}</span>
-                         </div>
-                       </div>
-                     )}
-                     {merchant.pointOfSaleCode && (
-                       <div className="flex items-start">
-                         <Hash className="w-4 h-4 mr-3 text-slate-400 mt-0.5" />
-                         <div className="flex-1">
-                           <span className="text-xs text-slate-500 block">Mã Điểm thu</span>
-                           <span className="font-mono font-medium text-slate-800">{merchant.pointOfSaleCode}</span>
                          </div>
                        </div>
                      )}
@@ -473,17 +482,6 @@ const Merchants: React.FC = () => {
                       onChange={e => setFormData({...formData, pointOfSaleName: e.target.value})}
                     />
                     <p className="text-xs text-slate-500">Tên điểm thu từ file Excel (cột "Điểm thu") - dùng để match với Agent</p>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-sm font-medium text-slate-700">Mã Điểm thu</label>
-                    <input
-                      type="text"
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 font-mono"
-                      placeholder="VD: NVAUDIO1"
-                      value={formData.pointOfSaleCode}
-                      onChange={e => setFormData({...formData, pointOfSaleCode: e.target.value})}
-                    />
-                    <p className="text-xs text-slate-500">Mã điểm thu từ file Excel (cột "Mã điểm thu")</p>
                   </div>
                 </div>
               </div>

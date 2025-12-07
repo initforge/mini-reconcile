@@ -7,6 +7,7 @@ const HEADER_STYLE = {
     fgColor: { rgb: '2563EB' } // Indigo
   },
   font: {
+    name: 'Arial',
     bold: true,
     color: { rgb: 'FFFFFF' },
     sz: 11
@@ -35,9 +36,34 @@ export const createStyledWorkbook = (): XLSX.WorkBook => {
 };
 
 /**
+ * Calculate optimal column width based on content
+ */
+const calculateColumnWidth = (sheet: XLSX.WorkSheet, colIndex: number, header: string, data: any[]): number => {
+  let maxLength = header ? header.length : 10;
+  
+  // Check all data rows in this column
+  const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1');
+  for (let row = 0; row <= range.e.r; row++) {
+    const cellAddress = XLSX.utils.encode_cell({ r: row, c: colIndex });
+    const cell = sheet[cellAddress];
+    if (cell && cell.v !== null && cell.v !== undefined) {
+      const cellValue = String(cell.v);
+      // Count characters, accounting for Vietnamese characters
+      const length = cellValue.length;
+      // Add some padding for numbers (they're narrower)
+      const adjustedLength = cell.t === 'n' ? length + 2 : length;
+      maxLength = Math.max(maxLength, adjustedLength);
+    }
+  }
+  
+  // Minimum width of 10, maximum of 50, add padding
+  return Math.min(Math.max(maxLength + 3, 12), 50);
+};
+
+/**
  * Add header row with styling
  */
-export const addHeaderRow = (sheet: XLSX.WorkSheet, headers: string[], startRow: number = 0): void => {
+export const addHeaderRow = (sheet: XLSX.WorkSheet, headers: string[], startRow: number = 0, data?: any[]): void => {
   // Add headers
   headers.forEach((header, colIndex) => {
     const cellAddress = XLSX.utils.encode_cell({ r: startRow, c: colIndex });
@@ -57,13 +83,14 @@ export const addHeaderRow = (sheet: XLSX.WorkSheet, headers: string[], startRow:
     Object.assign(sheet['!styles'][cellAddress], HEADER_STYLE);
   });
   
-  // Set column widths
+  // Set column widths with auto-sizing
   if (!sheet['!cols']) {
     sheet['!cols'] = [];
   }
   headers.forEach((header, colIndex) => {
+    const width = data ? calculateColumnWidth(sheet, colIndex, header, data) : Math.max(header.length + 3, 12);
     sheet['!cols'][colIndex] = {
-      wch: Math.max(header.length + 2, 12),
+      wch: width,
       wpx: undefined
     };
   });
@@ -125,9 +152,14 @@ export const addDataRows = (
       }
       
       const cellStyle: any = {
+        font: {
+          name: 'Arial',
+          sz: 10
+        },
         alignment: {
           horizontal: options?.numberColumns?.includes(colIndex) ? 'right' : 'left',
-          vertical: 'center'
+          vertical: 'center',
+          wrapText: true // Enable text wrapping
         },
         border: {
           top: { style: 'thin', color: { rgb: 'E2E8F0' } },
@@ -166,13 +198,25 @@ export const createStyledSheet = (
 ): void => {
   const sheet = XLSX.utils.aoa_to_sheet([[]]);
   
-  // Add header
-  addHeaderRow(sheet, headers, 0);
-  
-  // Add data
+  // Add data first (to calculate column widths accurately)
   if (data.length > 0) {
     addDataRows(sheet, data, headers, 1, options);
   }
+  
+  // Add header after data (so we can calculate widths based on all content)
+  addHeaderRow(sheet, headers, 0, data);
+  
+  // Recalculate column widths after all data is added
+  if (!sheet['!cols']) {
+    sheet['!cols'] = [];
+  }
+  headers.forEach((header, colIndex) => {
+    const width = calculateColumnWidth(sheet, colIndex, header, data);
+    sheet['!cols'][colIndex] = {
+      wch: width,
+      wpx: undefined
+    };
+  });
   
   // Set sheet range
   const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1');

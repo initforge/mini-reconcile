@@ -62,32 +62,56 @@ const UserReport: React.FC = () => {
     return Array.from(posSet).sort();
   }, [records, allPointOfSales]);
 
-  // Load reports
+  // Load reports - reload when filters change
   useEffect(() => {
     if (!userId) return;
     loadReports();
-  }, [userId, dateFrom, dateTo, dateFilterActive, statusFilter, selectedPointOfSaleName, currentPage]);
+  }, [userId, dateFrom, dateTo, statusFilter, selectedPointOfSaleName, currentPage]);
 
   const loadReports = async () => {
     if (!userId) return;
     
     setLoading(true);
     try {
+      // Load ALL records first (no date filter on server)
       const filters = {
         userId,
         status: statusFilter !== 'all' ? statusFilter : undefined,
         pointOfSaleName: selectedPointOfSaleName !== 'all' ? selectedPointOfSaleName : undefined,
-        dateFrom: dateFilterActive ? dateFrom : undefined,
-        dateTo: dateFilterActive ? dateTo : undefined
+        // Don't filter by date on server - do it client-side
+        dateFrom: undefined,
+        dateTo: undefined
       };
       
       const result = await ReportService.getReportRecords(filters, {
-        limit: itemsPerPage,
-        cursor: currentPage > 1 ? records[records.length - 1]?.id : undefined
+        limit: 10000 // Load all for client-side filtering
       });
       
-      setRecords(result.records);
-      setTotalRecords(result.total || 0);
+      // Apply date filter client-side (simple logic like "Đợt chi trả" tab)
+      let filteredRecords = result.records;
+      if (dateFrom || dateTo) {
+        filteredRecords = filteredRecords.filter(r => {
+          const dateToCheck = r.transactionDate || r.userBillCreatedAt || r.reconciledAt || r.createdAt;
+          if (!dateToCheck) return true;
+          
+          try {
+            const dateStr = typeof dateToCheck === 'string' ? dateToCheck : dateToCheck.toISOString();
+            const date = dateStr.split('T')[0];
+            if (dateFrom && date < dateFrom) return false;
+            if (dateTo && date > dateTo) return false;
+            return true;
+          } catch (error) {
+            return true;
+          }
+        });
+      }
+      
+      // Paginate client-side
+      const startIndex = (currentPage - 1) * itemsPerPage;
+      const paginatedRecords = filteredRecords.slice(startIndex, startIndex + itemsPerPage);
+      
+      setRecords(paginatedRecords);
+      setTotalRecords(filteredRecords.length);
     } catch (error) {
       console.error('Error loading reports:', error);
     } finally {
@@ -112,12 +136,8 @@ const UserReport: React.FC = () => {
     userId?: string;
     pointOfSaleName?: string;
   }) => {
-    const today = getTodayDate();
-    const datesChanged = newFilters.dateFrom !== today || newFilters.dateTo !== today;
-    
     setDateFrom(newFilters.dateFrom);
     setDateTo(newFilters.dateTo);
-    setDateFilterActive(datesChanged);
     setStatusFilter(newFilters.status);
     setSelectedPointOfSaleName(newFilters.pointOfSaleName || 'all');
     setCurrentPage(1);

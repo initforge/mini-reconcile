@@ -59,14 +59,16 @@ const Agents: React.FC = () => {
     totalBills: 0
   };
 
-  // Get all unique point of sales from merchants
+  // Get all unique point of sales from merchants (using merchant ID as key)
   const allPointOfSales = React.useMemo(() => {
-    const posSet = new Set<string>();
-    merchants.forEach((m: Merchant) => {
-      if (m.pointOfSaleName) posSet.add(m.pointOfSaleName);
-      if (m.pointOfSaleCode) posSet.add(m.pointOfSaleCode);
-    });
-    return Array.from(posSet).sort();
+    return merchants
+      .filter((m: Merchant) => m.pointOfSaleName) // Chỉ lấy merchant có pointOfSaleName
+      .map((m: Merchant) => ({
+        id: m.id, // Dùng Firebase key làm ID
+        name: m.pointOfSaleName!,
+        merchantName: m.name
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }, [merchants]);
   
   const [formData, setFormData] = useState<Omit<Agent, 'id'>>(initialFormState);
@@ -204,6 +206,18 @@ const Agents: React.FC = () => {
 
     if (!editingId && !formData.password.trim()) {
       alert('Vui lòng nhập mật khẩu cho đại lý (bắt buộc)');
+      return;
+    }
+
+    // Validate: Bắt buộc phải chọn ít nhất 1 điểm thu (Bước 3)
+    if (!formData.assignedPointOfSales || formData.assignedPointOfSales.length === 0) {
+      alert('Vui lòng chọn ít nhất 1 điểm thu trước khi tạo đại lý');
+      return;
+    }
+
+    // Kiểm tra nếu chưa có điểm thu nào trong hệ thống
+    if (allPointOfSales.length === 0) {
+      alert('Chưa có điểm thu nào trong hệ thống. Vui lòng tạo Điểm thu trước khi tạo đại lý.');
       return;
     }
 
@@ -443,11 +457,16 @@ const Agents: React.FC = () => {
                      <span className="text-sm font-semibold text-indigo-700">Điểm thu được gán ({agent.assignedPointOfSales.length})</span>
                    </div>
                    <div className="flex flex-wrap gap-2">
-                     {agent.assignedPointOfSales.map((pos, idx) => (
-                       <span key={idx} className="text-xs font-mono bg-white text-indigo-700 px-2 py-1 rounded border border-indigo-200">
-                         {pos}
-                       </span>
-                     ))}
+                     {agent.assignedPointOfSales.map((posId, idx) => {
+                       // posId là merchant ID, cần tìm merchant để lấy pointOfSaleName
+                       const merchant = merchants.find((m: Merchant) => m.id === posId);
+                       const displayName = merchant?.pointOfSaleName || posId;
+                       return (
+                         <span key={idx} className="text-xs font-mono bg-white text-indigo-700 px-2 py-1 rounded border border-indigo-200" title={merchant?.name || ''}>
+                           {displayName}
+                         </span>
+                       );
+                     })}
                    </div>
                </div>
                )}
@@ -674,19 +693,19 @@ const Agents: React.FC = () => {
                   <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-lg p-3 bg-slate-50">
                     <div className="grid grid-cols-1 gap-2">
                       {allPointOfSales.map((pos) => (
-                        <label key={pos} className="flex items-center space-x-3 p-2 hover:bg-white rounded cursor-pointer">
+                        <label key={pos.id} className="flex items-center space-x-3 p-2 hover:bg-white rounded cursor-pointer">
                           <input
                             type="checkbox"
                             className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                            checked={formData.assignedPointOfSales?.includes(pos) || false}
+                            checked={formData.assignedPointOfSales?.includes(pos.id) || false}
                             onChange={(e) => {
                               const current = formData.assignedPointOfSales || [];
                               const discountRatesByPOS = formData.discountRatesByPointOfSale || {};
                               
                               if (e.target.checked) {
-                                // Khi check, khởi tạo discount rates cho điểm bán này nếu chưa có
-                                if (!discountRatesByPOS[pos]) {
-                                  discountRatesByPOS[pos] = {
+                                // Khi check, khởi tạo discount rates cho điểm bán này nếu chưa có (dùng pointOfSaleName làm key)
+                                if (!discountRatesByPOS[pos.name]) {
+                                  discountRatesByPOS[pos.name] = {
                                     "QR 1 (VNPay)": 0,
                                     "QR 2 (App Bank)": 0,
                                     "Sofpos": 0,
@@ -695,22 +714,23 @@ const Agents: React.FC = () => {
                                 }
                                 setFormData({
                                   ...formData, 
-                                  assignedPointOfSales: [...current, pos],
+                                  assignedPointOfSales: [...current, pos.id],
                                   discountRatesByPointOfSale: discountRatesByPOS
                                 });
                               } else {
                                 // Khi uncheck, xóa discount rates của điểm bán này
-                                delete discountRatesByPOS[pos];
+                                delete discountRatesByPOS[pos.name];
                                 setFormData({
                                   ...formData, 
-                                  assignedPointOfSales: current.filter(p => p !== pos),
+                                  assignedPointOfSales: current.filter(p => p !== pos.id),
                                   discountRatesByPointOfSale: discountRatesByPOS
                                 });
                               }
                             }}
                           />
                           <div className="flex-1">
-                            <div className="font-mono text-sm text-slate-800">{pos}</div>
+                            <div className="font-mono text-sm text-slate-800">{pos.name}</div>
+                            <div className="text-xs text-slate-500">{pos.merchantName}</div>
                           </div>
                         </label>
                       ))}
@@ -737,8 +757,12 @@ const Agents: React.FC = () => {
                   </p>
                   
                   <div className="space-y-4">
-                    {formData.assignedPointOfSales.map((pos) => {
-                      const posDiscountRates = formData.discountRatesByPointOfSale?.[pos] || {
+                    {formData.assignedPointOfSales.map((posId) => {
+                      // posId là merchant ID, tìm merchant để lấy pointOfSaleName
+                      const merchant = merchants.find((m: Merchant) => m.id === posId);
+                      const posName = merchant?.pointOfSaleName || posId;
+                      // Dùng pointOfSaleName làm key trong discountRatesByPointOfSale
+                      const posDiscountRates = formData.discountRatesByPointOfSale?.[posName] || {
                         "QR 1 (VNPay)": 0,
                         "QR 2 (App Bank)": 0,
                         "Sofpos": 0,
@@ -746,8 +770,28 @@ const Agents: React.FC = () => {
                       };
                       
                       return (
-                        <div key={pos} className="border border-slate-200 rounded-lg p-4 bg-slate-50">
-                          <div className="font-mono text-sm font-semibold text-indigo-700 mb-3">{pos}</div>
+                        <div key={posId} className="border border-slate-200 rounded-lg p-4 bg-slate-50 relative">
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="font-mono text-sm font-semibold text-indigo-700">{posName}</div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                // Xóa điểm bán khỏi danh sách đã gán
+                                const newAssigned = (formData.assignedPointOfSales || []).filter(p => p !== posId);
+                                const newRates = { ...formData.discountRatesByPointOfSale };
+                                delete newRates[posName];
+                                setFormData({
+                                  ...formData,
+                                  assignedPointOfSales: newAssigned,
+                                  discountRatesByPointOfSale: newRates
+                                });
+                              }}
+                              className="text-red-600 hover:text-red-800 hover:bg-red-50 p-1.5 rounded transition-colors"
+                              title="Xóa điểm bán này"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             {["QR 1 (VNPay)", "QR 2 (App Bank)", "Sofpos", "POS"].map((method) => (
                               <div key={method} className="space-y-1">
@@ -762,10 +806,10 @@ const Agents: React.FC = () => {
                                     value={posDiscountRates[method] || 0}
                                     onChange={e => {
                                       const newRates = { ...formData.discountRatesByPointOfSale };
-                                      if (!newRates[pos]) {
-                                        newRates[pos] = { ...posDiscountRates };
+                                      if (!newRates[posName]) {
+                                        newRates[posName] = { ...posDiscountRates };
                                       }
-                                      newRates[pos][method] = parseFloat(e.target.value) || 0;
+                                      newRates[posName][method] = parseFloat(e.target.value) || 0;
                                       setFormData({ ...formData, discountRatesByPointOfSale: newRates });
                                     }}
                                   />

@@ -2,7 +2,7 @@
 import { ref, get, push, update, remove } from 'firebase/database';
 import { database } from './firebase';
 import { FirebaseUtils } from './firebaseHooks';
-import type { ReportRecord, ReportStatus } from '../../types';
+import type { ReportRecord, ReportStatus, AdminPaymentStatus, AgentPaymentStatus } from '../../types';
 
 export interface ReportRecordFilters {
   userId?: string;
@@ -105,14 +105,20 @@ export const ReportService = {
     }
     if (filters.dateFrom || filters.dateTo) {
       records = records.filter(r => {
-        if (!r.transactionDate) return true; // Include if no transactionDate
+        // Use transactionDate, createdAt, reconciledAt, or userBillCreatedAt as fallback
+        const dateToCheck = r.transactionDate || r.userBillCreatedAt || r.reconciledAt || r.createdAt;
+        if (!dateToCheck) return true; // Include if no date
+        
         try {
-          const recordDate = r.transactionDate.split('T')[0]; // Extract YYYY-MM-DD
+          // Handle both ISO string and Date object
+          const dateStr = typeof dateToCheck === 'string' ? dateToCheck : dateToCheck.toISOString();
+          const recordDate = dateStr.split('T')[0]; // Extract YYYY-MM-DD
+          // Include records where date is >= dateFrom and <= dateTo (inclusive)
           if (filters.dateFrom && recordDate < filters.dateFrom) return false;
           if (filters.dateTo && recordDate > filters.dateTo) return false;
           return true;
         } catch (error) {
-          console.warn(`Error parsing transactionDate for record ${r.id}:`, error);
+          console.warn(`Error parsing date for record ${r.id}:`, error);
           return true; // Include if parsing fails
         }
       });
@@ -189,6 +195,162 @@ export const ReportService = {
     };
 
     await update(ref(database, `report_records/${recordId}`), updateData);
+  },
+
+  /**
+   * Update payment status cho Admin → Agent (từ ReportRecord)
+   * Khi update trong báo cáo, đồng bộ với AdminPaymentToAgent và PaymentBatch
+   */
+  async updateAdminPaymentStatus(
+    reportRecordId: string,
+    newStatus: 'UNPAID' | 'PAID' | 'PARTIAL' | 'CANCELLED'
+  ): Promise<void> {
+    const record = await this.getReportRecordById(reportRecordId);
+    if (!record || !record.adminPaymentId) {
+      throw new Error('ReportRecord không có adminPaymentId');
+    }
+
+    const updates: any = {};
+    const timestamp = FirebaseUtils.getServerTimestamp();
+
+    // Update ReportRecord
+    updates[`report_records/${reportRecordId}/adminPaymentStatus`] = newStatus;
+    if (newStatus === 'PAID') {
+      updates[`report_records/${reportRecordId}/adminPaidAt`] = timestamp;
+    } else {
+      // Revert: xóa paidAt
+      updates[`report_records/${reportRecordId}/adminPaidAt`] = null;
+    }
+
+    // Update AdminPaymentToAgent
+    updates[`admin_payments_to_agents/${record.adminPaymentId}/paymentStatus`] = newStatus;
+    if (newStatus === 'PAID') {
+      updates[`admin_payments_to_agents/${record.adminPaymentId}/paidAt`] = timestamp;
+    } else {
+      updates[`admin_payments_to_agents/${record.adminPaymentId}/paidAt`] = null;
+    }
+
+    // Update PaymentBatch nếu có
+    const adminPaymentSnapshot = await get(ref(database, `admin_payments_to_agents/${record.adminPaymentId}`));
+    const adminPayment = adminPaymentSnapshot.val();
+    if (adminPayment?.batchId) {
+      // Check tất cả payments trong batch
+      const batchSnapshot = await get(ref(database, `payment_batches/${adminPayment.batchId}`));
+      const batch = batchSnapshot.val();
+      if (batch?.paymentIds) {
+        const allPaymentsSnapshot = await get(ref(database, 'admin_payments_to_agents'));
+        const allPayments = FirebaseUtils.objectToArray(allPaymentsSnapshot.val() || {});
+        const batchPayments = allPayments.filter((p: any) => batch.paymentIds.includes(p.id));
+        
+        // Tính paymentStatus của batch dựa trên tất cả payments
+        // Lấy payment status mới nhất từ database (sau khi update)
+        const updatedPaymentsSnapshot = await get(ref(database, 'admin_payments_to_agents'));
+        const allUpdatedPayments = FirebaseUtils.objectToArray(updatedPaymentsSnapshot.val() || {});
+        const updatedBatchPayments = allUpdatedPayments.filter((p: any) => batch.paymentIds.includes(p.id));
+        
+        const allPaid = updatedBatchPayments.length > 0 && updatedBatchPayments.every((p: any) => p.paymentStatus === 'PAID');
+        const allUnpaid = updatedBatchPayments.length > 0 && updatedBatchPayments.every((p: any) => p.paymentStatus === 'UNPAID');
+        const hasPartial = updatedBatchPayments.some((p: any) => p.paymentStatus === 'PARTIAL');
+        const hasCancelled = updatedBatchPayments.some((p: any) => p.paymentStatus === 'CANCELLED');
+        
+        let batchStatus: 'UNPAID' | 'PAID' | 'PARTIAL' | 'CANCELLED' = 'UNPAID';
+        if (hasCancelled) {
+          batchStatus = 'CANCELLED';
+        } else if (allPaid) {
+          batchStatus = 'PAID';
+        } else if (hasPartial) {
+          batchStatus = 'PARTIAL';
+        } else {
+          batchStatus = 'UNPAID'; // Default to UNPAID if any payment is unpaid
+        }
+        
+        updates[`payment_batches/${adminPayment.batchId}/paymentStatus`] = batchStatus;
+        if (batchStatus === 'PAID') {
+          updates[`payment_batches/${adminPayment.batchId}/paidAt`] = timestamp;
+        } else {
+          updates[`payment_batches/${adminPayment.batchId}/paidAt`] = null;
+        }
+      }
+    }
+
+    // Update tất cả ReportRecord có cùng adminPaymentId
+    const allRecordsSnapshot = await get(ref(database, 'report_records'));
+    const allRecords = FirebaseUtils.objectToArray(allRecordsSnapshot.val() || {});
+    const relatedRecords = allRecords.filter((r: ReportRecord) => r.adminPaymentId === record.adminPaymentId);
+    
+    relatedRecords.forEach((r: ReportRecord) => {
+      updates[`report_records/${r.id}/adminPaymentStatus`] = newStatus;
+      if (newStatus === 'PAID') {
+        updates[`report_records/${r.id}/adminPaidAt`] = timestamp;
+      } else {
+        updates[`report_records/${r.id}/adminPaidAt`] = null;
+      }
+    });
+
+    await update(ref(database), updates);
+  },
+
+  /**
+   * Update payment status cho Agent → User (từ ReportRecord)
+   * Khi update trong báo cáo, đồng bộ với AgentPaymentToUser và user_bills
+   */
+  async updateAgentPaymentStatus(
+    reportRecordId: string,
+    newStatus: 'UNPAID' | 'PAID'
+  ): Promise<void> {
+    const record = await this.getReportRecordById(reportRecordId);
+    if (!record || !record.agentPaymentId) {
+      throw new Error('ReportRecord không có agentPaymentId');
+    }
+
+    const updates: any = {};
+    const timestamp = FirebaseUtils.getServerTimestamp();
+
+    // Update ReportRecord
+    updates[`report_records/${reportRecordId}/agentPaymentStatus`] = newStatus;
+    if (newStatus === 'PAID') {
+      updates[`report_records/${reportRecordId}/agentPaidAt`] = timestamp;
+    } else {
+      updates[`report_records/${reportRecordId}/agentPaidAt`] = null;
+    }
+
+    // Update AgentPaymentToUser
+    updates[`agent_payments_to_users/${record.agentPaymentId}/status`] = newStatus;
+    if (newStatus === 'PAID') {
+      updates[`agent_payments_to_users/${record.agentPaymentId}/paidAt`] = timestamp;
+    } else {
+      updates[`agent_payments_to_users/${record.agentPaymentId}/paidAt`] = null;
+    }
+
+    // Update user_bills
+    const agentPaymentSnapshot = await get(ref(database, `agent_payments_to_users/${record.agentPaymentId}`));
+    const agentPayment = agentPaymentSnapshot.val();
+    if (agentPayment?.billIds) {
+      agentPayment.billIds.forEach((billId: string) => {
+        updates[`user_bills/${billId}/isPaidByAgent`] = newStatus === 'PAID';
+        if (newStatus === 'PAID') {
+          updates[`user_bills/${billId}/paidByAgentAt`] = timestamp;
+        } else {
+          updates[`user_bills/${billId}/paidByAgentAt`] = null;
+        }
+      });
+    }
+
+    // Update tất cả ReportRecord có cùng agentPaymentId
+    const allRecordsSnapshot = await get(ref(database, 'report_records'));
+    const allRecords = FirebaseUtils.objectToArray(allRecordsSnapshot.val() || {});
+    const relatedRecords = allRecords.filter((r: ReportRecord) => r.agentPaymentId === record.agentPaymentId);
+    
+    relatedRecords.forEach((r: ReportRecord) => {
+      updates[`report_records/${r.id}/agentPaymentStatus`] = newStatus;
+      if (newStatus === 'PAID') {
+        updates[`report_records/${r.id}/agentPaidAt`] = timestamp;
+      } else {
+        updates[`report_records/${r.id}/agentPaidAt`] = null;
+      }
+    });
+
+    await update(ref(database), updates);
   },
 
   /**

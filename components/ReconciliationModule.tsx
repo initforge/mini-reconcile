@@ -501,7 +501,6 @@ const ReconciliationModule: React.FC = () => {
           const method = findKey(row, ['phương thức','phương thức thanh toán','method','loại','type','payment']) || PaymentMethod.QR_VNPAY;
           
           // Extract point of sale information (pointOfSaleName đã được extract ở trên)
-          const pointOfSaleCode = findKey(row, ['mã điểm thu', 'mã điểm bán', 'point of sale code', 'pos code', 'collection point code']);
           const branchName = findKey(row, ['chi nhánh', 'branch', 'branch name', 'tên chi nhánh']);
           
           // Parse thêm các field mới
@@ -512,16 +511,15 @@ const ReconciliationModule: React.FC = () => {
           // Match merchant via point of sale ONLY (không check merchantCode/merchant name)
           let matchedMerchant: Merchant | null = null;
           
-          if (pointOfSaleName || pointOfSaleCode) {
+          if (pointOfSaleName) {
             matchedMerchant = merchants.find(m => 
-              (pointOfSaleName && (m.pointOfSaleName === pointOfSaleName || normalize(m.pointOfSaleName || '') === normalize(pointOfSaleName))) ||
-              (pointOfSaleCode && (m.pointOfSaleCode === pointOfSaleCode || normalize(m.pointOfSaleCode || '') === normalize(pointOfSaleCode)))
+              (m.pointOfSaleName === pointOfSaleName || normalize(m.pointOfSaleName || '') === normalize(pointOfSaleName))
             ) || null;
             
             if (matchedMerchant) {
               console.log(`✅ Matched merchant: ${matchedMerchant.pointOfSaleName} via point of sale`);
             } else {
-              console.warn(`⚠️ Không tìm thấy Merchant cho điểm thu: ${pointOfSaleName || pointOfSaleCode}`);
+              console.warn(`⚠️ Không tìm thấy Merchant cho điểm thu: ${pointOfSaleName}`);
             }
           }
           
@@ -556,7 +554,6 @@ const ReconciliationModule: React.FC = () => {
             transactionDate,
             uploadSessionId: '', // Will be set when saving to DB
             pointOfSaleName: pointOfSaleName ? String(pointOfSaleName) : undefined,
-            pointOfSaleCode: pointOfSaleCode ? String(pointOfSaleCode) : undefined,
             branchName: branchName ? String(branchName) : undefined,
             invoiceNumber: invoiceNumber ? String(invoiceNumber) : undefined,
             phoneNumber: phoneNumber ? String(phoneNumber) : undefined,
@@ -676,7 +673,6 @@ const ReconciliationModule: React.FC = () => {
           transactionDate: transactionDate,
           uploadSessionId: uploadSessionId,
           pointOfSaleName: item.pointOfSaleName || undefined,
-          pointOfSaleCode: item.pointOfSaleCode || undefined,
           branchName: item.branchName || undefined,
           invoiceNumber: item.invoiceNumber || undefined,
           phoneNumber: item.phoneNumber || undefined,
@@ -939,8 +935,7 @@ const ReconciliationModule: React.FC = () => {
 
       // Find merchant by point of sale
       const matchedMerchant = merchants.find(m => 
-        m.pointOfSaleName === merchantMatch?.pointOfSaleName ||
-        m.pointOfSaleCode === merchantMatch?.pointOfSaleCode
+        m.pointOfSaleName === merchantMatch?.pointOfSaleName
       );
 
       const completeRecord: ReconciliationRecord = {
@@ -972,8 +967,7 @@ const ReconciliationModule: React.FC = () => {
     merchantTransactions.forEach((merTx, merchIndex) => {
       if (!processedAgentCodes.has(merTx.transactionCode)) {
         const matchedMerchant = merchants.find(m => 
-          m.pointOfSaleName === merTx.pointOfSaleName ||
-          m.pointOfSaleCode === merTx.pointOfSaleCode
+          m.pointOfSaleName === merTx.pointOfSaleName
         );
         
         const missingRecord: ReconciliationRecord = {
@@ -1130,42 +1124,74 @@ const ReconciliationModule: React.FC = () => {
         if (matchingMerchants.length === 0) {
           // No matching merchant transaction
           status = 'UNMATCHED';
-          errorMessage = 'No matching merchant transaction';
+          errorMessage = 'Không tìm thấy giao dịch merchant tương ứng';
         } else {
-          // Filter by pointOfSaleName if bill has it
-          let filteredMerchants = matchingMerchants;
-          if (bill.pointOfSaleName) {
-            filteredMerchants = matchingMerchants.filter(mt => 
-              mt.pointOfSaleName && 
-              (mt.pointOfSaleName === bill.pointOfSaleName || 
-               normalize(mt.pointOfSaleName) === normalize(bill.pointOfSaleName))
-            );
+          // Simple logic: Find merchant that matches all 3 conditions
+          // 1. Transaction code (already matched)
+          // 2. Amount
+          // 3. Point of sale name (if both have it)
+          const matchedMerchant = matchingMerchants.find(mt => {
+            // Check amount
+            const merchantAmountToCheck = mt.amountBeforeDiscount || mt.amount;
+            const billAmountToCheck = bill.amount;
+            
+            // Validate amounts
+            if (!merchantAmountToCheck || !billAmountToCheck || 
+                isNaN(merchantAmountToCheck) || isNaN(billAmountToCheck) ||
+                !isFinite(merchantAmountToCheck) || !isFinite(billAmountToCheck)) {
+              return false;
+            }
+            
+            const amountMatch = Math.abs(merchantAmountToCheck - billAmountToCheck) <= 0.01;
+            if (!amountMatch) return false;
+            
+            // Check point of sale name (if both have it)
+            if (bill.pointOfSaleName && mt.pointOfSaleName) {
+              const posMatch = mt.pointOfSaleName === bill.pointOfSaleName || 
+                              normalize(mt.pointOfSaleName) === normalize(bill.pointOfSaleName);
+              return posMatch;
           }
           
-          if (filteredMerchants.length === 0) {
-            // Point of sale mismatch
-            status = 'ERROR';
-            errorMessage = 'Point of sale mismatch';
-          } else if (filteredMerchants.length > 1) {
-            // Duplicate merchant transactions (same code + same point of sale)
-            status = 'ERROR';
-            errorMessage = 'Duplicate merchant transaction code';
+            // If one doesn't have pointOfSaleName, still consider it a match if amount matches
+            return true;
+          });
+          
+          if (matchedMerchant) {
+            // Perfect match - all conditions met
+            status = 'MATCHED';
+            merchantTransactionId = matchedMerchant.id;
+            merchantCode = matchedMerchant.merchantCode;
+            merchantAmount = matchedMerchant.amount;
           } else {
-            // Exactly one match - check amountBeforeDiscount (số tiền trước KM)
-            const merchant = filteredMerchants[0];
-            const merchantAmountToCheck = merchant.amountBeforeDiscount || merchant.amount;
-            const billAmountToCheck = bill.amount; // UserBill amount is already the transaction amount
+            // Check why it didn't match
+            const firstMerchant = matchingMerchants[0];
+            const merchantAmountToCheck = firstMerchant.amountBeforeDiscount || firstMerchant.amount;
+            const billAmountToCheck = bill.amount;
             
-            if (Math.abs(merchantAmountToCheck - billAmountToCheck) > 0.01) {
-              // Amount mismatch
+            // Validate amounts
+            const isValidMerchantAmount = merchantAmountToCheck != null && 
+                                         !isNaN(merchantAmountToCheck) && 
+                                         isFinite(merchantAmountToCheck) && 
+                                         merchantAmountToCheck > 0;
+            const isValidBillAmount = billAmountToCheck != null && 
+                                     !isNaN(billAmountToCheck) && 
+                                     isFinite(billAmountToCheck) && 
+                                     billAmountToCheck > 0;
+            
+            if (!isValidMerchantAmount || !isValidBillAmount) {
               status = 'ERROR';
-              errorMessage = 'Amount mismatch';
+              errorMessage = `Số tiền không hợp lệ: Merchant ${merchantAmountToCheck} vs Bill ${billAmountToCheck}`;
+            } else if (Math.abs(merchantAmountToCheck - billAmountToCheck) > 0.01) {
+              status = 'ERROR';
+              errorMessage = `Số tiền không khớp: Merchant ${merchantAmountToCheck.toLocaleString('vi-VN')}đ vs Bill ${billAmountToCheck.toLocaleString('vi-VN')}đ`;
+            } else if (bill.pointOfSaleName && firstMerchant.pointOfSaleName) {
+              // Amount matches but point of sale doesn't
+              status = 'ERROR';
+              errorMessage = 'Điểm thu không khớp';
             } else {
-              // Perfect match - all 3 conditions met: transactionCode, pointOfSaleName, amountBeforeDiscount
-              status = 'MATCHED';
-              merchantTransactionId = merchant.id;
-              merchantCode = merchant.merchantCode;
-              merchantAmount = merchant.amount; // Use amount (số tiền sau KM) for display
+              // Should not happen, but fallback
+              status = 'ERROR';
+              errorMessage = 'Không thể đối soát';
             }
           }
         }
@@ -1196,7 +1222,6 @@ const ReconciliationModule: React.FC = () => {
           merchantAmount: merchantAmount || undefined,
           merchantAmountBeforeDiscount: matchedMerchant?.amountBeforeDiscount || undefined,
           merchantPointOfSaleName: matchedMerchant?.pointOfSaleName || undefined,
-          merchantPointOfSaleCode: matchedMerchant?.pointOfSaleCode || undefined,
           merchantBranchName: matchedMerchant?.branchName || undefined,
           merchantInvoiceNumber: matchedMerchant?.invoiceNumber || undefined,
           merchantPhoneNumber: matchedMerchant?.phoneNumber || undefined,
@@ -1219,12 +1244,30 @@ const ReconciliationModule: React.FC = () => {
       await ReportService.createReportRecords(reportRecords);
       console.log(`✅ Created ${reportRecords.length} report records`);
       
-      // Update user_bills status to DONE
-      const updatePromises = pendingBills.map(bill => 
-        UserService.updateUserBill(bill.id, { status: 'DONE' as const })
-      );
+      // Update user_bills status:
+      // - MATCHED: DONE (đã xử lý)
+      // - ERROR hoặc UNMATCHED: PENDING (trả về bill đang chờ đối soát với error message cụ thể)
+      const updatePromises = pendingBills.map((bill, index) => {
+        const reportRecord = reportRecords[index];
+        // Chỉ update bill tương ứng với reportRecord này
+        if (reportRecord.status === 'MATCHED') {
+          // MATCHED: đánh dấu DONE cho bill này
+          return UserService.updateUserBill(bill.id, { status: 'DONE' as const });
+        } else {
+          // ERROR hoặc UNMATCHED: trả về PENDING với error message cụ thể
+          // Lưu error message vào note field để admin biết lý do
+          const errorMsg = reportRecord.errorMessage || 
+                          (reportRecord.status === 'ERROR' ? 'Lỗi đối soát' : 'Chưa khớp');
+          return UserService.updateUserBill(bill.id, { 
+            status: 'PENDING' as const,
+            note: errorMsg // Lưu error message để admin biết lý do
+          });
+        }
+      });
       await Promise.all(updatePromises);
-      console.log(`✅ Updated ${pendingBills.length} user_bills status to DONE`);
+      const unmatchedCount = reportRecords.filter(r => r.status === 'UNMATCHED').length;
+      const doneCount = pendingBills.length - unmatchedCount;
+      console.log(`✅ Updated ${doneCount} user_bills status to DONE, ${unmatchedCount} bills trả về PENDING (chỉ các bill UNMATCHED)`);
       
       // Calculate stats
       const matched = reportRecords.filter(r => r.status === 'MATCHED').length;

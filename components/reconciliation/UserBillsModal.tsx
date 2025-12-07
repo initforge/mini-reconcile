@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, Filter, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { X, Calendar, Filter, Clock, CheckCircle, XCircle, AlertCircle, Plus, Edit2, Trash2, Save, ChevronDown, ChevronUp } from 'lucide-react';
 import { UserService } from '../../src/lib/userServices';
-import type { UserBill } from '../../types';
+import { useRealtimeData, FirebaseUtils } from '../../src/lib/firebaseHooks';
+import type { UserBill, PaymentMethod, ReportRecord } from '../../types';
 
 interface UserBillsModalProps {
   userId: string;
@@ -15,6 +16,34 @@ const UserBillsModal: React.FC<UserBillsModalProps> = ({ userId, userName, isOpe
   const [loading, setLoading] = useState(false);
   const [dateFrom, setDateFrom] = useState<string>('');
   const [dateTo, setDateTo] = useState<string>('');
+  const [editingBill, setEditingBill] = useState<UserBill | null>(null);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [expandedBills, setExpandedBills] = useState<Set<string>>(new Set());
+  
+  // Load report records to check UNMATCHED status
+  const { data: reportRecordsData } = useRealtimeData<Record<string, ReportRecord>>('/report_records');
+  
+  // Get report records map by userBillId
+  const reportRecordsByBillId = React.useMemo(() => {
+    if (!reportRecordsData) return new Map<string, ReportRecord>();
+    const records = FirebaseUtils.objectToArray(reportRecordsData);
+    const map = new Map<string, ReportRecord>();
+    records.forEach((record: ReportRecord) => {
+      if (record.userBillId) {
+        map.set(record.userBillId, record);
+      }
+    });
+    return map;
+  }, [reportRecordsData]);
+  
+  // Form state for add/edit
+  const [formData, setFormData] = useState({
+    transactionCode: '',
+    amount: '',
+    paymentMethod: 'QR 1 (VNPay)' as PaymentMethod,
+    pointOfSaleName: '',
+    invoiceNumber: ''
+  });
 
   useEffect(() => {
     if (isOpen && userId) {
@@ -52,8 +81,21 @@ const UserBillsModal: React.FC<UserBillsModalProps> = ({ userId, userName, isOpe
     });
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
+  const getStatusBadge = (bill: UserBill) => {
+    // Check if bill has been reconciled but unmatched
+    const reportRecord = reportRecordsByBillId.get(bill.id);
+    if (reportRecord && reportRecord.status === 'UNMATCHED') {
+      // Đã đối soát nhưng chưa khớp - hiển thị "Chưa khớp"
+      return (
+        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
+          <AlertCircle className="w-3 h-3 mr-1" />
+          Chưa khớp
+        </span>
+      );
+    }
+    
+    // Otherwise use bill status
+    switch (bill.status) {
       case 'MATCHED':
         return (
           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
@@ -79,6 +121,106 @@ const UserBillsModal: React.FC<UserBillsModalProps> = ({ userId, userName, isOpe
     }
   };
 
+  const handleAddBill = () => {
+    setFormData({
+      transactionCode: '',
+      amount: '',
+      paymentMethod: 'QR 1 (VNPay)' as PaymentMethod,
+      pointOfSaleName: '',
+      invoiceNumber: ''
+    });
+    setEditingBill(null);
+    setShowAddModal(true);
+  };
+
+  const handleEditBill = (bill: UserBill) => {
+    setFormData({
+      transactionCode: bill.transactionCode,
+      amount: bill.amount.toString(),
+      paymentMethod: bill.paymentMethod,
+      pointOfSaleName: bill.pointOfSaleName || '',
+      invoiceNumber: bill.invoiceNumber || ''
+    });
+    setEditingBill(bill);
+    setShowAddModal(true);
+  };
+
+  const handleDeleteBill = async (billId: string) => {
+    if (!window.confirm('Bạn có chắc chắn muốn xóa bill này?')) return;
+    
+    try {
+      await UserService.deleteUserBill(billId);
+      await loadBills();
+      alert('Đã xóa bill thành công!');
+    } catch (error) {
+      console.error('Error deleting bill:', error);
+      alert('Có lỗi khi xóa bill');
+    }
+  };
+
+  const handleSaveBill = async () => {
+    if (!formData.transactionCode.trim() || !formData.amount.trim()) {
+      alert('Vui lòng nhập đầy đủ thông tin');
+      return;
+    }
+
+    try {
+      if (editingBill) {
+        // Update existing bill
+        await UserService.updateUserBill(editingBill.id, {
+          transactionCode: formData.transactionCode,
+          amount: parseFloat(formData.amount),
+          paymentMethod: formData.paymentMethod,
+          pointOfSaleName: formData.pointOfSaleName || undefined,
+          invoiceNumber: formData.invoiceNumber || undefined,
+          status: 'PENDING' // Reset to PENDING when editing
+        });
+        alert('Đã cập nhật bill thành công!');
+      } else {
+        // Create new bill - need to get agentId from first bill or fetch user data
+        const firstBill = bills[0];
+        if (!firstBill) {
+          alert('Không thể tạo bill mới. Vui lòng thử lại.');
+          return;
+        }
+        
+        await UserService.createUserBill({
+          userId,
+          agentId: firstBill.agentId,
+          agentCode: firstBill.agentCode,
+          transactionCode: formData.transactionCode,
+          amount: parseFloat(formData.amount),
+          paymentMethod: formData.paymentMethod,
+          pointOfSaleName: formData.pointOfSaleName || undefined,
+          invoiceNumber: formData.invoiceNumber || undefined,
+          imageUrl: '', // Empty for manually created bills
+          timestamp: new Date().toISOString(),
+          status: 'PENDING',
+          isPaidByAgent: false,
+          createdAt: new Date().toISOString()
+        });
+        alert('Đã thêm bill thành công!');
+      }
+      
+      setShowAddModal(false);
+      setEditingBill(null);
+      await loadBills();
+    } catch (error) {
+      console.error('Error saving bill:', error);
+      alert('Có lỗi khi lưu bill');
+    }
+  };
+
+  const toggleBillExpansion = (billId: string) => {
+    const newExpanded = new Set(expandedBills);
+    if (newExpanded.has(billId)) {
+      newExpanded.delete(billId);
+    } else {
+      newExpanded.add(billId);
+    }
+    setExpandedBills(newExpanded);
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -93,12 +235,21 @@ const UserBillsModal: React.FC<UserBillsModalProps> = ({ userId, userName, isOpe
                 <h3 className="text-lg font-medium text-slate-900">Chi tiết bills - {userName}</h3>
                 <p className="text-sm text-slate-500 mt-1">User ID: {userId}</p>
               </div>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={handleAddBill}
+                  className="flex items-center space-x-2 px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Thêm bill</span>
+                </button>
               <button
                 onClick={onClose}
                 className="text-slate-400 hover:text-slate-500"
               >
                 <X className="w-6 h-6" />
               </button>
+              </div>
             </div>
 
             {/* Filters */}
@@ -156,6 +307,7 @@ const UserBillsModal: React.FC<UserBillsModalProps> = ({ userId, userName, isOpe
                 <table className="w-full">
                   <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase w-12"></th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">
                         Mã giao dịch
                       </th>
@@ -174,11 +326,29 @@ const UserBillsModal: React.FC<UserBillsModalProps> = ({ userId, userName, isOpe
                       <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">
                         Trạng thái
                       </th>
+                      <th className="px-4 py-3 text-center text-xs font-medium text-slate-500 uppercase">
+                        Thao tác
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
-                    {bills.map((bill) => (
-                      <tr key={bill.id} className="hover:bg-slate-50">
+                    {bills.map((bill) => {
+                      const isExpanded = expandedBills.has(bill.id);
+                      return (
+                        <React.Fragment key={bill.id}>
+                          <tr className="hover:bg-slate-50">
+                            <td className="px-4 py-3">
+                              <button
+                                onClick={() => toggleBillExpansion(bill.id)}
+                                className="text-slate-400 hover:text-slate-600"
+                              >
+                                {isExpanded ? (
+                                  <ChevronUp className="w-4 h-4" />
+                                ) : (
+                                  <ChevronDown className="w-4 h-4" />
+                                )}
+                              </button>
+                            </td>
                         <td className="px-4 py-3 text-sm font-medium text-slate-900">
                           {bill.transactionCode}
                         </td>
@@ -195,10 +365,56 @@ const UserBillsModal: React.FC<UserBillsModalProps> = ({ userId, userName, isOpe
                           {formatDate(bill.createdAt)}
                         </td>
                         <td className="px-4 py-3 text-sm">
-                          {getStatusBadge(bill.status)}
+                          {getStatusBadge(bill)}
+                        </td>
+                            <td className="px-4 py-3 text-center">
+                              <div className="flex items-center justify-center space-x-2">
+                                <button
+                                  onClick={() => handleEditBill(bill)}
+                                  className="text-indigo-600 hover:text-indigo-800"
+                                  title="Sửa"
+                                >
+                                  <Edit2 className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteBill(bill.id)}
+                                  className="text-red-600 hover:text-red-800"
+                                  title="Xóa"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                          {isExpanded && (
+                            <tr>
+                              <td colSpan={8} className="px-4 py-3 bg-slate-50">
+                                <div className="grid grid-cols-2 gap-4 text-sm">
+                                  <div>
+                                    <span className="font-medium text-slate-600">Số hóa đơn:</span>
+                                    <span className="ml-2 text-slate-900">{bill.invoiceNumber || '-'}</span>
+                                  </div>
+                                  <div>
+                                    <span className="font-medium text-slate-600">Agent Code:</span>
+                                    <span className="ml-2 text-slate-900">{bill.agentCode}</span>
+                                  </div>
+                                  {bill.imageUrl && (
+                                    <div className="col-span-2">
+                                      <span className="font-medium text-slate-600">Ảnh bill:</span>
+                                      <img 
+                                        src={bill.imageUrl} 
+                                        alt="Bill" 
+                                        className="mt-2 max-w-xs rounded-lg border border-slate-200"
+                                      />
+                                    </div>
+                                  )}
+                                </div>
                         </td>
                       </tr>
-                    ))}
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -215,6 +431,126 @@ const UserBillsModal: React.FC<UserBillsModalProps> = ({ userId, userName, isOpe
           </div>
         </div>
       </div>
+
+      {/* Add/Edit Bill Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 z-[60] overflow-y-auto">
+          <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+            <div className="fixed inset-0 transition-opacity bg-slate-500 bg-opacity-75" onClick={() => {
+              setShowAddModal(false);
+              setEditingBill(null);
+            }}></div>
+
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+              <div className="bg-white px-4 pt-5 pb-4 sm:p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-medium text-slate-900">
+                    {editingBill ? 'Sửa bill' : 'Thêm bill mới'}
+                  </h3>
+                  <button
+                    onClick={() => {
+                      setShowAddModal(false);
+                      setEditingBill(null);
+                    }}
+                    className="text-slate-400 hover:text-slate-500"
+                  >
+                    <X className="w-6 h-6" />
+                  </button>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Mã giao dịch *
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.transactionCode}
+                      onChange={(e) => setFormData({ ...formData, transactionCode: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                      placeholder="Nhập mã giao dịch"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Số tiền *
+                    </label>
+                    <input
+                      type="number"
+                      value={formData.amount}
+                      onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                      placeholder="Nhập số tiền"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Phương thức thanh toán
+                    </label>
+                    <select
+                      value={formData.paymentMethod}
+                      onChange={(e) => setFormData({ ...formData, paymentMethod: e.target.value as PaymentMethod })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="QR 1 (VNPay)">QR 1 (VNPay)</option>
+                      <option value="QR 2 (App Bank)">QR 2 (App Bank)</option>
+                      <option value="Sofpos">Sofpos</option>
+                      <option value="POS">POS</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Điểm thu
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.pointOfSaleName}
+                      onChange={(e) => setFormData({ ...formData, pointOfSaleName: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                      placeholder="Nhập điểm thu (tùy chọn)"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Số hóa đơn
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.invoiceNumber}
+                      onChange={(e) => setFormData({ ...formData, invoiceNumber: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                      placeholder="Nhập số hóa đơn (tùy chọn)"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-slate-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button
+                  onClick={handleSaveBill}
+                  className="w-full inline-flex justify-center items-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 sm:ml-3 sm:w-auto sm:text-sm"
+                >
+                  <Save className="w-4 h-4 mr-2" />
+                  {editingBill ? 'Cập nhật' : 'Thêm'}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowAddModal(false);
+                    setEditingBill(null);
+                  }}
+                  className="mt-3 w-full inline-flex justify-center rounded-md border border-slate-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-slate-700 hover:bg-slate-50 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
+                >
+                  Hủy
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -6,6 +6,10 @@ export enum PaymentMethod {
   POS = 'POS'
 }
 
+// Payment status types - tách biệt cho 2 luồng thanh toán
+export type AdminPaymentStatus = 'UNPAID' | 'PAID' | 'PARTIAL' | 'CANCELLED';
+export type AgentPaymentStatus = 'UNPAID' | 'PAID';
+
 export enum TransactionStatus {
   PENDING = 'PENDING',
   MATCHED = 'MATCHED',
@@ -76,7 +80,6 @@ export interface Merchant {
   // Point of sale fields
   branchName?: string; // Tên chi nhánh
   pointOfSaleName?: string; // Tên điểm thu (ví dụ: "ANCATTUONG66PKV01")
-  pointOfSaleCode?: string; // Mã điểm thu (ví dụ: "NVAUDIO1")
 }
 
 // Phí chiết khấu cụ thể cho từng đại lý
@@ -109,9 +112,9 @@ export interface Agent {
   qrCodeBase64?: string; // Mã QR thanh toán của đại lý (base64)
   notes?: string;
   // Point of sale assignment
-  assignedPointOfSales?: string[]; // Danh sách điểm thu được gán (lưu pointOfSaleName hoặc pointOfSaleCode)
+  assignedPointOfSales?: string[]; // Danh sách điểm thu được gán (lưu pointOfSaleId - Firebase key của merchant)
   // Chiết khấu theo từng điểm bán (NEW WORKFLOW: Gán điểm bán trước, sau đó cấu hình chiết khấu)
-  discountRatesByPointOfSale?: Record<string, Record<string, number>>; // { pointOfSaleName: { paymentMethod: rate } }
+  discountRatesByPointOfSale?: Record<string, Record<string, number>>; // { pointOfSaleName: { paymentMethod: rate } } - key là pointOfSaleName, không phải pointOfSaleId
   // Referral links
   referralLinkUser?: string; // Link cho user: "/user/upbill?agents=AG_001"
   referralLinkAdmin?: string; // Link cho admin: "/admin/reconciliation?agent=AG_001"
@@ -129,7 +132,6 @@ export interface MerchantTransaction {
   transactionDate: string;      // ISO string - ngày giao dịch
   uploadSessionId: string;      // ID phiên upload file Excel
   pointOfSaleName?: string;      // Điểm thu từ Excel
-  pointOfSaleCode?: string;      // Mã điểm thu
   branchName?: string;           // Chi nhánh
   invoiceNumber?: string;         // Số hóa đơn
   phoneNumber?: string;          // Số điện thoại
@@ -216,11 +218,16 @@ export interface AgentReconciliationSession {
 export interface AgentPaymentToUser {
   id: string;
   agentId: string;
-  userId: string;
+  userId?: string; // Optional - có thể thanh toán cho nhiều user
   billIds: string[]; // Danh sách user_bills IDs
   totalAmount: number;
+  feeAmount?: number; // Phí (nếu có)
+  netAmount?: number; // Số tiền thực trả (nếu có)
+  status: AgentPaymentStatus; // UNPAID | PAID
   note: string;
-  paidAt: string;
+  createdAt: string; // ISO timestamp
+  paidAt?: string; // ISO timestamp - khi status = PAID
+  approvalCode?: string; // Mã chuẩn chi nội bộ của đại lý
 }
 
 // Admin Payment to Agent - Admin thanh toán cho đại lý
@@ -232,9 +239,13 @@ export interface AdminPaymentToAgent {
   totalAmount: number; // Tổng tiền giao dịch
   feeAmount: number; // Phí chiết khấu
   netAmount: number; // Số tiền thực trả cho đại lý
+  paymentStatus: AdminPaymentStatus; // UNPAID | PAID | PARTIAL | CANCELLED
   note: string;
-  paidAt: string;
+  paidAt?: string; // ISO timestamp - khi paymentStatus = PAID
   createdBy: string; // Admin user ID
+  createdAt: string; // ISO timestamp
+  batchId?: string; // ID của PaymentBatch nếu có
+  approvalCode?: string; // Mã chuẩn chi
 }
 
 export interface ReconciliationRecord {
@@ -365,14 +376,17 @@ export interface PaymentBatch {
   totalAmount: number;
   totalFees: number;
   netAmount: number;
-  paymentIds: string[];
+  paymentIds: string[]; // Danh sách AdminPaymentToAgent IDs
   paymentCount: number;
   agentCount: number;
-  status: 'DRAFT' | 'EXPORTED' | 'COMPLETED';
+  paymentStatus: AdminPaymentStatus; // UNPAID | PAID | PARTIAL | CANCELLED (default: DRAFT/UNPAID)
+  status: 'DRAFT' | 'EXPORTED' | 'COMPLETED'; // Legacy field - giữ để backward compatibility
   createdAt: string;
   createdBy: string; // User ID  
+  paidAt?: string; // ISO timestamp - khi paymentStatus = PAID
   exportedAt?: string;
   completedAt?: string;
+  approvalCode?: string; // Mã chuẩn chi
   notes?: string;
 }
 
@@ -497,7 +511,6 @@ export interface ReportRecord {
   merchantAmount?: number; // Số tiền sau KM từ merchant
   merchantAmountBeforeDiscount?: number; // Số tiền trước KM từ merchant (dùng để match)
   merchantPointOfSaleName?: string; // Điểm thu từ merchant
-  merchantPointOfSaleCode?: string; // Mã điểm thu từ merchant
   merchantBranchName?: string; // Chi nhánh từ merchant
   merchantInvoiceNumber?: string; // Số hóa đơn từ merchant
   merchantPhoneNumber?: string; // Số điện thoại từ merchant
@@ -517,6 +530,20 @@ export interface ReportRecord {
   note?: string;
   isManuallyEdited?: boolean;
   editedFields?: string[];
+  
+  // Payment tracking - Luồng Admin → Agent
+  adminPaymentId?: string; // Link với AdminPaymentToAgent
+  adminPaidAt?: string; // ISO timestamp
+  adminPaymentStatus?: AdminPaymentStatus; // UNPAID | PAID | PARTIAL | CANCELLED
+  
+  // Payment tracking - Luồng Agent → User
+  agentPaymentId?: string; // Link với AgentPaymentToUser
+  agentPaidAt?: string; // ISO timestamp (hoặc dùng user_bills.paidByAgentAt)
+  agentPaymentStatus?: AgentPaymentStatus; // UNPAID | PAID
+  
+  // Fee calculation (cached for performance)
+  feeAmount?: number; // Phí chiết khấu
+  netAmount?: number; // Số tiền sau phí
   
   createdAt: string;            // ISO – thời điểm tạo record
 }

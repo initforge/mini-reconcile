@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { CreditCard, CheckCircle, Clock } from 'lucide-react';
 import { useRealtimeData, FirebaseUtils } from '../../src/lib/firebaseHooks';
 import type { UserBill, Agent, AgentPaymentToUser } from '../../types';
+import Pagination from '../Pagination';
 
 const PaymentStatus: React.FC = () => {
   const userAuth = localStorage.getItem('userAuth');
@@ -15,19 +16,35 @@ const PaymentStatus: React.FC = () => {
   const allBills = FirebaseUtils.objectToArray(billsData || {});
   const allPayments = FirebaseUtils.objectToArray(paymentsData || {});
 
+  // Pagination state for paid bills
+  const [paidBillsPage, setPaidBillsPage] = useState(1);
+  const paidBillsItemsPerPage = 5;
+
   // Get user's bills grouped by agent
   const userBills = allBills.filter(bill => bill.userId === userId);
   const paidBills = userBills.filter(bill => bill.isPaidByAgent);
   const unpaidBills = userBills.filter(bill => !bill.isPaidByAgent && bill.status === 'MATCHED');
 
   // Group by agent
-  const billsByAgent = paidBills.reduce((acc, bill) => {
+  const billsByAgent = useMemo(() => {
+    return paidBills.reduce((acc, bill) => {
     if (!acc[bill.agentId]) {
       acc[bill.agentId] = [];
     }
     acc[bill.agentId].push(bill);
     return acc;
   }, {} as Record<string, UserBill[]>);
+  }, [paidBills]);
+
+  // Paginate agent groups
+  const agentEntries = Object.entries(billsByAgent);
+  const totalPaidAgents = agentEntries.length;
+  const paidBillsTotalPages = Math.ceil(totalPaidAgents / paidBillsItemsPerPage);
+  const paginatedAgentEntries = useMemo(() => {
+    const startIndex = (paidBillsPage - 1) * paidBillsItemsPerPage;
+    const endIndex = startIndex + paidBillsItemsPerPage;
+    return agentEntries.slice(startIndex, endIndex);
+  }, [agentEntries, paidBillsPage, paidBillsItemsPerPage]);
 
   const getAgentName = (agentId: string) => {
     const agent = agents.find(a => a.id === agentId);
@@ -102,12 +119,13 @@ const PaymentStatus: React.FC = () => {
       <div className="space-y-4">
         <h2 className="text-xl font-bold text-slate-900">Bills đã được thanh toán</h2>
         
-        {Object.keys(billsByAgent).length === 0 ? (
+        {totalPaidAgents === 0 ? (
           <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-500">
             Chưa có bill nào được thanh toán
           </div>
         ) : (
-          Object.entries(billsByAgent).map(([agentId, bills]) => {
+          <>
+            {paginatedAgentEntries.map(([agentId, bills]) => {
             const totalAmount = bills.reduce((sum, bill) => sum + bill.amount, 0);
             const payment = allPayments.find(p => p.userId === userId && p.agentId === agentId);
             
@@ -153,7 +171,19 @@ const PaymentStatus: React.FC = () => {
                 </div>
               </div>
             );
-          })
+            })}
+            
+            {/* Pagination for paid bills */}
+            {paidBillsTotalPages > 1 && (
+              <div className="mt-6">
+                <Pagination
+                  currentPage={paidBillsPage}
+                  totalPages={paidBillsTotalPages}
+                  onPageChange={setPaidBillsPage}
+                />
+              </div>
+            )}
+          </>
         )}
       </div>
 

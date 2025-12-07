@@ -1,6 +1,8 @@
 import React from 'react';
 import { Upload, History, CreditCard, Settings, LogOut, FileText } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { useRealtimeData, FirebaseUtils } from '../../src/lib/firebaseHooks';
+import type { User } from '../../types';
 
 interface UserSidebarProps {
   activeTab: string;
@@ -10,6 +12,14 @@ interface UserSidebarProps {
 const UserSidebar: React.FC<UserSidebarProps> = ({ activeTab, onLogout }) => {
   const navigate = useNavigate();
   const location = useLocation();
+
+  // Get user info from localStorage
+  const userAuth = localStorage.getItem('userAuth');
+  const userId = userAuth ? JSON.parse(userAuth).userId : null;
+  
+  // Load user data from Firebase
+  const { data: usersData } = useRealtimeData<Record<string, User>>('/users');
+  const user = usersData && userId ? usersData[userId] : null;
 
   const menuItems = [
     { id: 'upload', label: 'Up Bill', icon: Upload, path: '/user/upbill' },
@@ -33,6 +43,11 @@ const UserSidebar: React.FC<UserSidebarProps> = ({ activeTab, onLogout }) => {
       <div className="p-6 border-b border-slate-800">
         <h1 className="text-xl font-bold">PayReconcile</h1>
         <p className="text-sm text-slate-400 mt-1">Người dùng</p>
+        {user && (
+          <p className="text-xs text-slate-300 mt-2 truncate" title={user.fullName}>
+            {user.fullName || user.phone || userId}
+          </p>
+        )}
       </div>
 
       <nav className="flex-1 p-4 space-y-2">
@@ -58,6 +73,19 @@ const UserSidebar: React.FC<UserSidebarProps> = ({ activeTab, onLogout }) => {
       </nav>
 
       <div className="p-4 border-t border-slate-800">
+        {user && (
+          <div className="flex items-center space-x-3 px-3 py-2 mb-3 rounded-lg bg-slate-700/30">
+            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-400 to-indigo-600 flex items-center justify-center text-xs font-bold text-white shadow-md">
+              {(user.fullName || user.phone || 'U').charAt(0).toUpperCase()}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-white truncate">{user.fullName || user.phone || userId}</p>
+              {user.phone && user.fullName && (
+                <p className="text-xs text-slate-400 truncate">{user.phone}</p>
+              )}
+            </div>
+          </div>
+        )}
         <button
           onClick={onLogout}
           className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"

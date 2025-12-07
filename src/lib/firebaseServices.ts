@@ -669,8 +669,12 @@ export const PaymentsService = {
   async createBatch(batch: Omit<PaymentBatch, 'id'>): Promise<string> {
     const newBatch = {
       ...batch,
-      createdAt: FirebaseUtils.getServerTimestamp(),
-      status: 'DRAFT' as const
+      createdAt: batch.createdAt || FirebaseUtils.getServerTimestamp(),
+      status: batch.status || 'DRAFT' as const,
+      // Preserve paymentStatus, paidAt, approvalCode if provided
+      paymentStatus: batch.paymentStatus,
+      paidAt: batch.paidAt,
+      approvalCode: batch.approvalCode
     }
     const newRef = await push(ref(database, 'payment_batches'), newBatch)
     return newRef.key!

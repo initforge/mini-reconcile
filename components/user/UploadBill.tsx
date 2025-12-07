@@ -332,6 +332,17 @@ const UploadBill: React.FC = () => {
         const ocrResult = preview.ocrResult!;
         
         try {
+          // Check for duplicate transaction code
+          const existingBill = await UserService.findBillByTransactionCode(ocrResult.transactionCode);
+          if (existingBill) {
+            errorCount++;
+            const errorMsg = `Bill số ${existingBill.invoiceNumber || existingBill.transactionCode} với mã giao dịch ${ocrResult.transactionCode} đã tồn tại trên hệ thống (Bill ID: ${existingBill.id})`;
+            errors.push(errorMsg);
+            alert(`⚠️ Bill trùng lặp!\n\n${errorMsg}\n\nVui lòng kiểm tra lại.`);
+            console.warn(`⚠️ Duplicate bill detected: ${ocrResult.transactionCode}`);
+            continue;
+          }
+
           // Convert object URL to base64 for storage
           const base64Data = await new Promise<string>((resolve) => {
             const reader = new FileReader();

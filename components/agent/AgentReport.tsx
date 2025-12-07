@@ -6,6 +6,7 @@ import type { ReportRecord, ReportStatus, User, Agent } from '../../types';
 import ReportFilters from '../shared/ReportFilters';
 import ReportTable from '../shared/ReportTable';
 import Pagination from '../Pagination';
+import AgentUserBillsHistory from './AgentUserBillsHistory';
 
 const AgentReport: React.FC = () => {
   const agentAuth = localStorage.getItem('agentAuth');
@@ -24,13 +25,16 @@ const AgentReport: React.FC = () => {
     return today.toISOString().split('T')[0];
   };
 
-  // Filter state - default to today for display, but don't filter initially
-  const [dateFrom, setDateFrom] = useState<string>(getTodayDate());
-  const [dateTo, setDateTo] = useState<string>(getTodayDate());
-  const [dateFilterActive, setDateFilterActive] = useState(false);
+  // Filter state - start empty, only filter when user explicitly sets dates
+  const [dateFrom, setDateFrom] = useState<string>('');
+  const [dateTo, setDateTo] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<ReportStatus | 'all'>('all');
   const [selectedUserId, setSelectedUserId] = useState<string>('all');
   const [selectedPointOfSaleName, setSelectedPointOfSaleName] = useState<string>('all');
+  const [searchTerm, setSearchTerm] = useState<string>(''); // Search by transaction code
+  
+  // Tab state
+  const [activeTab, setActiveTab] = useState<'reports' | 'bills'>('reports');
   
   // Data state
   const [records, setRecords] = useState<ReportRecord[]>([]);
@@ -38,6 +42,10 @@ const AgentReport: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalRecords, setTotalRecords] = useState(0);
   const itemsPerPage = 20;
+  
+  // Sorting state - Agent: sort by user (customer)
+  const [sortBy, setSortBy] = useState<'user' | 'date' | 'amount'>('user');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
   // Get users that have bills for this agent
   const agentUsers = React.useMemo(() => {
@@ -80,33 +88,97 @@ const AgentReport: React.FC = () => {
     return Array.from(posSet).sort();
   }, [records, allPointOfSales]);
 
-  // Load reports
+  // Load reports - reload when filters change
   useEffect(() => {
     if (!agentCode) return;
     loadReports();
-  }, [agentCode, dateFrom, dateTo, dateFilterActive, statusFilter, selectedUserId, selectedPointOfSaleName, currentPage]);
+  }, [agentCode, dateFrom, dateTo, statusFilter, selectedUserId, selectedPointOfSaleName, currentPage, sortBy, sortOrder, searchTerm]);
 
   const loadReports = async () => {
     if (!agentCode) return;
     
     setLoading(true);
     try {
+      // Load ALL records first (no date filter on server)
       const filters = {
         agentCode,
         userId: selectedUserId !== 'all' ? selectedUserId : undefined,
         status: statusFilter !== 'all' ? statusFilter : undefined,
         pointOfSaleName: selectedPointOfSaleName !== 'all' ? selectedPointOfSaleName : undefined,
-        dateFrom: dateFilterActive ? dateFrom : undefined,
-        dateTo: dateFilterActive ? dateTo : undefined
+        // Don't filter by date on server - do it client-side
+        dateFrom: undefined,
+        dateTo: undefined
       };
       
       const result = await ReportService.getReportRecords(filters, {
-        limit: itemsPerPage,
-        cursor: currentPage > 1 ? records[records.length - 1]?.id : undefined
+        limit: 10000 // Load all for sorting, then paginate
       });
       
-      setRecords(result.records);
-      setTotalRecords(result.total || 0);
+      // Filter out UNMATCHED records - không hiển thị trong báo cáo
+      // Also filter out empty/invalid records (no transactionCode or amount)
+      let filteredRecords = result.records.filter(r => {
+        if (r.status === 'UNMATCHED') return false;
+        // Filter out records with no transactionCode or invalid amount
+        if (!r.transactionCode || r.transactionCode.trim() === '') return false;
+        if (!r.amount || isNaN(r.amount) || !isFinite(r.amount) || r.amount <= 0) return false;
+        return true;
+      });
+      
+      // Apply date filter client-side (simple logic like "Đợt chi trả" tab)
+      if (dateFrom || dateTo) {
+        filteredRecords = filteredRecords.filter(r => {
+          const dateToCheck = r.transactionDate || r.userBillCreatedAt || r.reconciledAt || r.createdAt;
+          if (!dateToCheck) return true;
+          
+          try {
+            const dateStr = typeof dateToCheck === 'string' ? dateToCheck : dateToCheck.toISOString();
+            const date = dateStr.split('T')[0];
+            if (dateFrom && date < dateFrom) return false;
+            if (dateTo && date > dateTo) return false;
+            return true;
+          } catch (error) {
+            return true;
+          }
+        });
+      }
+      
+      // Filter by search term (transaction code)
+      if (searchTerm.trim()) {
+        const searchLower = searchTerm.toLowerCase().trim();
+        filteredRecords = filteredRecords.filter(r => 
+          r.transactionCode?.toLowerCase().includes(searchLower)
+        );
+      }
+      
+      // Sort records by user (default for Agent)
+      let sortedRecords = [...filteredRecords];
+      if (sortBy === 'user') {
+        sortedRecords.sort((a, b) => {
+          const userA = users.find(u => u.id === a.userId);
+          const userB = users.find(u => u.id === b.userId);
+          const nameA = userA?.fullName || userA?.phone || a.userId;
+          const nameB = userB?.fullName || userB?.phone || b.userId;
+          const comparison = nameA.localeCompare(nameB, 'vi');
+          return sortOrder === 'asc' ? comparison : -comparison;
+        });
+      } else if (sortBy === 'date') {
+        sortedRecords.sort((a, b) => {
+          const dateA = new Date(a.transactionDate || a.createdAt).getTime();
+          const dateB = new Date(b.transactionDate || b.createdAt).getTime();
+          return sortOrder === 'asc' ? dateA - dateB : dateB - dateA;
+        });
+      } else if (sortBy === 'amount') {
+        sortedRecords.sort((a, b) => {
+          return sortOrder === 'asc' ? a.amount - b.amount : b.amount - a.amount;
+        });
+      }
+      
+      // Paginate after sorting
+      const startIndex = (currentPage - 1) * itemsPerPage;
+      const paginatedRecords = sortedRecords.slice(startIndex, startIndex + itemsPerPage);
+      
+      setRecords(paginatedRecords);
+      setTotalRecords(sortedRecords.length);
     } catch (error) {
       console.error('Error loading reports:', error);
     } finally {
@@ -121,6 +193,7 @@ const AgentReport: React.FC = () => {
     setStatusFilter('all');
     setSelectedUserId('all');
     setSelectedPointOfSaleName('all');
+    setSearchTerm('');
     setCurrentPage(1);
   };
 
@@ -132,12 +205,9 @@ const AgentReport: React.FC = () => {
     userId?: string;
     pointOfSaleName?: string;
   }) => {
-    const today = getTodayDate();
-    const datesChanged = newFilters.dateFrom !== today || newFilters.dateTo !== today;
-    
+    // If dates are provided and different from today, activate date filter
     setDateFrom(newFilters.dateFrom);
     setDateTo(newFilters.dateTo);
-    setDateFilterActive(datesChanged);
     setStatusFilter(newFilters.status);
     setSelectedUserId(newFilters.userId || 'all');
     setSelectedPointOfSaleName(newFilters.pointOfSaleName || 'all');
@@ -156,63 +226,150 @@ const AgentReport: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3 sm:space-y-4 md:space-y-6">
       {/* Header */}
-      <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6">
+      <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-3 sm:p-4 md:p-6">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-2xl font-bold text-slate-900">Báo cáo</h2>
-            <p className="text-sm text-slate-500 mt-1">
-              Đại lý: {currentAgent?.name || agentCode} ({agentCode})
-            </p>
+            <h2 className="text-lg sm:text-xl md:text-2xl font-bold text-slate-900">Báo cáo</h2>
           </div>
         </div>
       </div>
 
-      <ReportFilters
-        role="AGENT"
-        filters={{
-          dateFrom,
-          dateTo,
-          status: statusFilter,
-          userId: selectedUserId !== 'all' ? selectedUserId : undefined,
-          pointOfSaleName: selectedPointOfSaleName !== 'all' ? selectedPointOfSaleName : undefined
-        }}
-        users={agentUsers}
-        pointOfSales={availablePointOfSales}
-        onChange={handleFilterChange}
-        onClear={handleClearFilters}
-      />
-
-      {loading ? (
-        <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-12 text-center">
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
-          <p className="mt-4 text-slate-500">Đang tải dữ liệu...</p>
+      {/* Tabs */}
+      <div className="bg-white rounded-lg shadow-sm border border-slate-200">
+        <div className="border-b border-slate-200">
+          <div className="flex">
+            <button
+              onClick={() => setActiveTab('reports')}
+              className={`px-6 py-4 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'reports'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              Báo cáo đối soát
+            </button>
+            <button
+              onClick={() => setActiveTab('bills')}
+              className={`px-6 py-4 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'bills'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              Lịch sử bill khách
+            </button>
+          </div>
         </div>
-      ) : (
-        <>
-          <ReportTable
-            role="AGENT"
-            records={records}
-            users={users}
-            agents={agents}
-            pagination={totalPages > 1 ? {
-              currentPage,
-              totalPages,
-              onPageChange: setCurrentPage
-            } : undefined}
-          />
-          {totalPages > 1 && (
-            <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6">
-              <Pagination
-                currentPage={currentPage}
-                totalPages={totalPages}
-                onPageChange={setCurrentPage}
-              />
-            </div>
+
+        <div className="p-3 sm:p-4 md:p-6">
+          {activeTab === 'reports' && (
+            <>
+              <div className="space-y-2 sm:space-y-3 md:space-y-4">
+                {/* Search Bar */}
+                <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-3 sm:p-4">
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <div className="flex-1">
+                      <label className="block text-xs sm:text-sm font-medium text-slate-700 mb-1">
+                        Tìm kiếm theo mã chuẩn chi
+                      </label>
+                      <input
+                        type="text"
+                        value={searchTerm}
+                        onChange={(e) => {
+                          setSearchTerm(e.target.value);
+                          setCurrentPage(1);
+                        }}
+                        placeholder="Nhập mã chuẩn chi (mã giao dịch)..."
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+                
+                <ReportFilters
+                  role="AGENT"
+                  filters={{
+                    dateFrom,
+                    dateTo,
+                    status: statusFilter,
+                    userId: selectedUserId !== 'all' ? selectedUserId : undefined,
+                    pointOfSaleName: selectedPointOfSaleName !== 'all' ? selectedPointOfSaleName : undefined
+                  }}
+                  users={agentUsers}
+                  pointOfSales={availablePointOfSales}
+                  onChange={handleFilterChange}
+                  onClear={handleClearFilters}
+                />
+                
+                {/* Sorting Controls */}
+                <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-2 sm:p-3 md:p-4">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3 md:gap-4">
+                    <label className="text-xs sm:text-sm font-medium text-slate-700">Sắp xếp theo:</label>
+                    <select
+                      value={sortBy}
+                      onChange={(e) => {
+                        setSortBy(e.target.value as 'user' | 'date' | 'amount');
+                        setCurrentPage(1);
+                      }}
+                      className="px-2 sm:px-3 py-1.5 sm:py-2 border border-slate-300 rounded-lg text-xs sm:text-sm focus:ring-indigo-500 focus:border-indigo-500"
+                    >
+                      <option value="user">Khách hàng</option>
+                      <option value="date">Ngày giao dịch</option>
+                      <option value="amount">Số tiền</option>
+                    </select>
+                    <button
+                      onClick={() => {
+                        setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+                        setCurrentPage(1);
+                      }}
+                      className="px-2 sm:px-3 py-1.5 sm:py-2 border border-slate-300 rounded-lg text-xs sm:text-sm hover:bg-slate-50 transition-colors"
+                    >
+                      {sortOrder === 'asc' ? '↑ Tăng dần' : '↓ Giảm dần'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {loading ? (
+                <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-12 text-center">
+                  <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+                  <p className="mt-4 text-slate-500">Đang tải dữ liệu...</p>
+                </div>
+              ) : (
+                <>
+                  <ReportTable
+                    role="AGENT"
+                    records={records}
+                    users={users}
+                    agents={agents}
+                    pagination={totalPages > 1 ? {
+                      currentPage,
+                      totalPages,
+                      onPageChange: setCurrentPage
+                    } : undefined}
+                    onPaymentStatusChange={loadReports}
+                  />
+                  {totalPages > 1 && (
+                    <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-3 sm:p-4 md:p-6">
+                      <Pagination
+                        currentPage={currentPage}
+                        totalPages={totalPages}
+                        onPageChange={setCurrentPage}
+                      />
+                    </div>
+                  )}
+                </>
+              )}
+            </>
           )}
-        </>
-      )}
+
+          {activeTab === 'bills' && (
+            <AgentUserBillsHistory agentId={agentId} />
+          )}
+        </div>
+      </div>
     </div>
   );
 };
