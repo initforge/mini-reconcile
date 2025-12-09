@@ -623,8 +623,8 @@ const ReportTable: React.FC<ReportTableProps> = ({
                 <thead className="bg-slate-50 border-b-2 border-slate-300">
                   {/* Header row with 3 main column groups */}
                   <tr>
-                    {/* Thông tin từ Bill: Thời gian GD + Mã giao dịch + (Điểm thu nếu USER/AGENT) + (Người dùng nếu showUserColumn) + (Tên đại lý nếu showAgentColumn) */}
-                    <th colSpan={1 + 1 + (role === 'USER' || role === 'AGENT' ? 1 : 0) + (showUserColumn ? 1 : 0) + (showAgentColumn ? 1 : 0)} className="px-1.5 sm:px-2 md:px-2.5 lg:px-4 py-1.5 sm:py-1.5 md:py-2 text-center font-bold text-slate-700 bg-blue-50 border-r-2 border-slate-300">
+                    {/* Thông tin từ Bill: Mã giao dịch + (Điểm thu nếu USER/AGENT) + (Người dùng nếu showUserColumn) + (Tên đại lý nếu showAgentColumn) */}
+                    <th colSpan={1 + (role === 'USER' || role === 'AGENT' ? 1 : 0) + (showUserColumn ? 1 : 0) + (showAgentColumn ? 1 : 0)} className="px-1.5 sm:px-2 md:px-2.5 lg:px-4 py-1.5 sm:py-1.5 md:py-2 text-center font-bold text-slate-700 bg-blue-50 border-r-2 border-slate-300">
                       Thông tin từ Bill
                     </th>
                     {/* Thông tin từ Merchants: Thời gian GD + Mã giao dịch + Chi nhánh + Mã điểm thu + Điểm thu + Số hóa đơn + Mã chuẩn chi + Số điện thoại + Số tiền trước KM + Số tiền sau KM + empty cell */}
@@ -647,11 +647,7 @@ const ReportTable: React.FC<ReportTableProps> = ({
                   {/* Sub-header row with individual columns - Sắp xếp theo thứ tự Excel export */}
                   <tr>
                     {/* NHÓM: Thông tin từ Bill */}
-                    {/* 1. Thời gian GD */}
-                    <th className="px-2 sm:px-3 md:px-4 lg:px-6 py-2 sm:py-2.5 md:py-3 text-left text-[10px] sm:text-xs font-medium text-slate-500 uppercase tracking-wider bg-blue-50 border-r border-slate-200">
-                      Thời gian GD
-                    </th>
-                    {/* 2. Mã giao dịch */}
+                    {/* 1. Mã giao dịch */}
                     <th className="px-2 sm:px-3 md:px-4 lg:px-6 py-2 sm:py-2.5 md:py-3 text-left text-[10px] sm:text-xs font-medium text-slate-500 uppercase tracking-wider bg-blue-50 border-r border-slate-200">
                       Mã giao dịch
                     </th>
@@ -844,11 +840,7 @@ const ReportTable: React.FC<ReportTableProps> = ({
                     return (
                     <tr key={record.id} className={`hover:bg-slate-100 transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}`}>
                       {/* NHÓM: Thông tin từ Bill */}
-                      {/* 1. Thời gian GD */}
-                      <td className="px-2 sm:px-3 md:px-4 lg:px-6 py-2 sm:py-3 md:py-4 whitespace-nowrap text-[10px] sm:text-xs md:text-sm text-slate-500 bg-blue-50 border-r border-slate-200">
-                        {formatDateTime(record.transactionDate || record.merchantTransactionDate || record.createdAt)}
-                      </td>
-                      {/* 2. Mã giao dịch */}
+                      {/* 1. Mã giao dịch */}
                       <td className="px-2 sm:px-3 md:px-4 lg:px-6 py-2 sm:py-3 md:py-4 whitespace-nowrap text-[10px] sm:text-xs md:text-sm font-medium text-slate-900 bg-blue-50 border-r border-slate-200">
                         {record.userBillId ? (
                           <span className="font-mono text-[9px] sm:text-[10px] md:text-xs">{record.transactionCode || '-'}</span>
