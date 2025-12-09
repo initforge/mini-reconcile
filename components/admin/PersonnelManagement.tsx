@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Search, Users, Plus, Edit2, Trash2, Eye, X, Save, Phone, Mail, User as UserIcon } from 'lucide-react';
+import { Search, Users, Plus, Edit2, Trash2, Eye, X, Save, Phone, Mail, User as UserIcon, EyeOff } from 'lucide-react';
 import { UserService } from '../../src/lib/userServices';
 import { useRealtimeData, FirebaseUtils, useFirebaseWrite } from '../../src/lib/firebaseHooks';
 import { DeletionService } from '../../src/lib/deletionService';
@@ -13,6 +13,7 @@ const PersonnelManagement: React.FC = () => {
   const [viewingId, setViewingId] = useState<string | null>(null);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deletingUser, setDeletingUser] = useState<{ id: string; name: string } | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
   const { writeData, updateData, deleteData } = useFirebaseWrite();
 
   const { data: usersData } = useRealtimeData<Record<string, User>>('/users');
@@ -330,14 +331,23 @@ const PersonnelManagement: React.FC = () => {
                 <label className="block text-sm font-medium text-slate-700 mb-1">
                   Mật khẩu {!editingId && <span className="text-red-500">*</span>}
                 </label>
+                <div className="relative">
                 <input
-                  type="password"
+                    type={showPassword ? 'text' : 'password'}
                   required={!editingId}
                   value={formData.password}
                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  className="block w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                    className="block w-full px-3 py-2 pr-10 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
                   placeholder={editingId ? "Để trống nếu không đổi mật khẩu" : "Nhập mật khẩu"}
                 />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+                  >
+                    {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                  </button>
+                </div>
               </div>
 
               <div className="flex justify-end space-x-3 pt-4">

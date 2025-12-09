@@ -7,7 +7,7 @@ export enum PaymentMethod {
 }
 
 // Payment status types - tách biệt cho 2 luồng thanh toán
-export type AdminPaymentStatus = 'UNPAID' | 'PAID' | 'PARTIAL' | 'CANCELLED';
+export type AdminPaymentStatus = 'UNPAID' | 'PAID' | 'PARTIAL' | 'CANCELLED' | 'DRAFT';
 export type AgentPaymentStatus = 'UNPAID' | 'PAID';
 
 export enum TransactionStatus {
@@ -137,6 +137,7 @@ export interface MerchantTransaction {
   phoneNumber?: string;          // Số điện thoại
   promotionCode?: string;         // Mã khuyến mại
   rawRowIndex?: number;         // Optional: index dòng trong file để debug
+  rawData?: Record<string, any>; // All columns from Excel file
   createdAt: string;            // ISO - thời điểm tạo record
 }
 
@@ -239,13 +240,14 @@ export interface AdminPaymentToAgent {
   totalAmount: number; // Tổng tiền giao dịch
   feeAmount: number; // Phí chiết khấu
   netAmount: number; // Số tiền thực trả cho đại lý
-  paymentStatus: AdminPaymentStatus; // UNPAID | PAID | PARTIAL | CANCELLED
+  paymentStatus: AdminPaymentStatus; // UNPAID | PAID | PARTIAL | CANCELLED | DRAFT
   note: string;
   paidAt?: string; // ISO timestamp - khi paymentStatus = PAID
   createdBy: string; // Admin user ID
   createdAt: string; // ISO timestamp
   batchId?: string; // ID của PaymentBatch nếu có
   approvalCode?: string; // Mã chuẩn chi
+  reportRecordIds?: string[]; // Optional list of report records in this payment
 }
 
 export interface ReconciliationRecord {
@@ -379,7 +381,7 @@ export interface PaymentBatch {
   paymentIds: string[]; // Danh sách AdminPaymentToAgent IDs
   paymentCount: number;
   agentCount: number;
-  paymentStatus: AdminPaymentStatus; // UNPAID | PAID | PARTIAL | CANCELLED (default: DRAFT/UNPAID)
+  paymentStatus: AdminPaymentStatus; // UNPAID | PAID | PARTIAL | CANCELLED | DRAFT (default: DRAFT/UNPAID)
   status: 'DRAFT' | 'EXPORTED' | 'COMPLETED'; // Legacy field - giữ để backward compatibility
   createdAt: string;
   createdBy: string; // User ID  
@@ -388,6 +390,7 @@ export interface PaymentBatch {
   completedAt?: string;
   approvalCode?: string; // Mã chuẩn chi
   notes?: string;
+  adminPaymentIds?: string[]; // Optional list of AdminPaymentToAgent IDs in this batch
 }
 
 // App Settings - cấu hình hệ thống
@@ -518,8 +521,10 @@ export interface ReportRecord {
   merchantTransactionDate?: string; // ISO - thời gian giao dịch từ merchant
   
   // Reconciliation result
-  status: ReportStatus;
+  status: ReportStatus; // Keep for backward compatibility
+  reconciliationStatus?: 'PENDING' | 'MATCHED' | 'ERROR' | 'UNMATCHED'; // New field for auto-reconciliation
   errorMessage?: string;
+  merchantsFileData?: Record<string, any>; // All columns from merchants Excel file
   
   // Metadata
   reconciledAt: string;         // ISO – thời điểm chạy đối soát
@@ -533,8 +538,9 @@ export interface ReportRecord {
   
   // Payment tracking - Luồng Admin → Agent
   adminPaymentId?: string; // Link với AdminPaymentToAgent
+  adminBatchId?: string; // Link với PaymentBatch
   adminPaidAt?: string; // ISO timestamp
-  adminPaymentStatus?: AdminPaymentStatus; // UNPAID | PAID | PARTIAL | CANCELLED
+  adminPaymentStatus?: AdminPaymentStatus; // UNPAID | PAID | PARTIAL | CANCELLED | DRAFT
   
   // Payment tracking - Luồng Agent → User
   agentPaymentId?: string; // Link với AgentPaymentToUser

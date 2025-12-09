@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Plus, Search, Edit2, Trash2, Save, X, Percent, Building, CreditCard, BarChart3, ToggleLeft, ToggleRight, AlertCircle, Users, CheckSquare, Square, Phone, Mail, MapPin, Upload, Image as ImageIcon, QrCode, Store } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, Save, X, Percent, Building, CreditCard, BarChart3, ToggleLeft, ToggleRight, AlertCircle, Users, CheckSquare, Square, Phone, Mail, MapPin, Upload, Image as ImageIcon, QrCode, Store, Eye, EyeOff } from 'lucide-react';
 import { Agent, Merchant, PaymentMethod } from '../types';
 import { useRealtimeData, useFirebaseWrite, FirebaseUtils } from '../src/lib/firebaseHooks';
 import { AgentsService } from '../src/lib/firebaseServices';
@@ -25,6 +25,7 @@ const Agents: React.FC = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deletingAgent, setDeletingAgent] = useState<{ id: string; name: string } | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
   
   // Convert Firebase object to array - exclude deleted agents
   const allAgents = FirebaseUtils.objectToArray(agentsData || {});
@@ -571,14 +572,23 @@ const Agents: React.FC = () => {
                     <label className="text-sm font-medium text-slate-700">
                       Mật khẩu {!editingId && <span className="text-red-500">*</span>}
                     </label>
+                    <div className="relative">
                     <input
                       required={!editingId}
-                      type="password"
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                        type={showPassword ? 'text' : 'password'}
+                        className="w-full px-3 py-2 pr-10 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
                       placeholder={editingId ? "Để trống nếu không đổi" : "Nhập mật khẩu"}
                       value={formData.password}
                       onChange={e => setFormData({...formData, password: e.target.value})}
                     />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+                      >
+                        {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                      </button>
+                    </div>
                     <p className="text-xs text-slate-500 mt-1">
                       {editingId ? 'Để trống nếu không muốn đổi mật khẩu' : 'Mật khẩu đăng nhập cho đại lý (bắt buộc)'}
                     </p>

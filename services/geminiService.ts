@@ -1,69 +1,42 @@
 import { GoogleGenAI } from "@google/genai";
 import { ReconciliationRecord, TransactionStatus, AgentSubmission } from "../types";
-import { SettingsService } from "../src/lib/firebaseServices";
-
-// Cache API key to avoid repeated Firebase calls
-let cachedApiKey: string | null = null;
-let apiKeyCacheTime: number = 0;
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
-
-/**
- * Clear API key cache (useful when API key is updated in Settings)
- */
-export const clearApiKeyCache = () => {
-  cachedApiKey = null;
-  apiKeyCacheTime = 0;
-};
 
 /**
  * Get Gemini API Key with priority:
- * 1. Firebase Settings (geminiApiKey)
+ * 1. localStorage (user-provided key)
  * 2. Environment variable (VITE_GEMINI_API_KEY or GEMINI_API_KEY)
  */
-const getApiKey = async (): Promise<string> => {
-  // Check cache first
-  const now = Date.now();
-  if (cachedApiKey && (now - apiKeyCacheTime) < CACHE_DURATION) {
-    return cachedApiKey;
-  }
-
-  try {
-    // Try to get from Firebase settings first
-    const settings = await SettingsService.getSettings();
-    if (settings.geminiApiKey && settings.geminiApiKey.trim()) {
-      cachedApiKey = settings.geminiApiKey.trim();
-      apiKeyCacheTime = now;
-      console.log('🔑 Loaded API key from Firebase Settings (Web UI)');
-      console.log('🔑 API key preview:', cachedApiKey.substring(0, 10) + '...');
-      return cachedApiKey;
+function getApiKey(): string | null {
+  // Check localStorage first (user-provided key)
+  if (typeof window !== 'undefined') {
+    const userKey = localStorage.getItem('payreconcile:geminiApiKey');
+    if (userKey && userKey.trim()) {
+      console.log('🔑 Loaded API key from localStorage');
+      console.log('🔑 API key preview:', userKey.substring(0, 10) + '...');
+      return userKey.trim();
     }
-  } catch (error) {
-    console.warn('Could not load API key from Firebase settings:', error);
   }
 
   // Fallback to environment variable
   const envKey = import.meta.env.VITE_GEMINI_API_KEY || 
                  import.meta.env.GEMINI_API_KEY || 
-                 process.env.VITE_GEMINI_API_KEY ||
-                 process.env.GEMINI_API_KEY ||
-                 '';
+                 (typeof process !== 'undefined' && process.env ? (process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY) : null) ||
+                 null;
   
   if (envKey) {
     console.log('🔑 Loaded API key from environment variable');
-    cachedApiKey = envKey;
-    apiKeyCacheTime = now;
     return envKey;
   }
 
-  console.warn('⚠️ No API key found in environment variables or Firebase settings');
-  return '';
-};
+  console.warn('⚠️ No API key found in localStorage or environment variables');
+  return null;
+}
 
 export const generateReconciliationReport = async (records: ReconciliationRecord[]): Promise<string> => {
-  const API_KEY = await getApiKey();
+  const API_KEY = getApiKey();
   
   if (!API_KEY) {
-    return "API Key chưa được cấu hình. Vui lòng:\n1. Thêm VITE_GEMINI_API_KEY vào file .env, hoặc\n2. Vào Settings → API & Tích hợp để nhập API key.";
+    return "API Key chưa được cấu hình. Vui lòng:\n1. Dán Gemini API key trên trang Upload Bill, hoặc\n2. Thêm VITE_GEMINI_API_KEY vào file .env.";
   }
 
   try {
@@ -153,10 +126,10 @@ export const extractTransactionFromImage = async (
   agentId: string = 'unknown',
   retryCount: number = 0
 ): Promise<AgentSubmission> => {
-  const API_KEY = await getApiKey();
+  const API_KEY = getApiKey();
   
   if (!API_KEY) {
-    throw new Error("API Key chưa được cấu hình. Vui lòng:\n1. Thêm VITE_GEMINI_API_KEY vào file .env, hoặc\n2. Vào Settings → API & Tích hợp để nhập API key từ Google AI Studio.");
+    throw new Error("API Key chưa được cấu hình. Vui lòng:\n1. Dán Gemini API key trên trang Upload Bill, hoặc\n2. Thêm VITE_GEMINI_API_KEY vào file .env.");
   }
 
   // Log API key info for debugging (first 10 chars only for security)

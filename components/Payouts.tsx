@@ -97,11 +97,32 @@ const Payouts: React.FC = () => {
         if (report.adminPaymentId && report.adminPaymentStatus === 'PAID') {
           return false; // Already paid
         }
-        // Also check if there's an AdminPaymentToAgent record for this bill
-        const isPaid = allAdminPayments.some((payment: AdminPaymentToAgent) => 
-          payment.billIds.includes(report.userBillId) && payment.paymentStatus === 'PAID'
+        
+        // Check if there's an AdminPaymentToAgent record for this bill
+        // Logic giống bên đại lý: chỉ hiển thị nếu chưa có payment hoặc payment chưa được thanh toán
+        const relatedPayments = allAdminPayments.filter((payment: AdminPaymentToAgent) => 
+          payment.billIds.includes(report.userBillId)
         );
-        return !isPaid;
+        
+        // Nếu có payment với status PAID, thì đã thanh toán -> loại bỏ
+        const hasPaidPayment = relatedPayments.some((payment: AdminPaymentToAgent) => 
+          payment.paymentStatus === 'PAID'
+        );
+        if (hasPaidPayment) {
+          return false; // Already paid
+        }
+        
+        // Nếu có payment với status UNPAID nhưng có batchId (đã từng được thanh toán rồi revert),
+        // thì cũng loại bỏ vì đây là duplicate từ lần revert
+        // Chỉ hiển thị nếu chưa có payment nào hoặc payment chưa có batchId (chưa từng được thanh toán)
+        const hasRevertedPayment = relatedPayments.some((payment: AdminPaymentToAgent) => 
+          payment.paymentStatus === 'UNPAID' && payment.batchId
+        );
+        if (hasRevertedPayment) {
+          return false; // This is a reverted payment, don't show duplicate
+        }
+        
+        return true; // No payment or payment is truly unpaid (never been paid)
       });
       
       setUnpaidReports(unpaid);
@@ -664,17 +685,39 @@ const Payouts: React.FC = () => {
     }
   };
 
+  // Revert batch - chuyển batch về DRAFT và clear payment links
+  const handleRevertBatch = async (batchId: string) => {
+    if (!window.confirm('Bạn có chắc chắn muốn đổi trạng thái đợt chi trả này về "Nháp"? Tất cả thanh toán liên quan sẽ được chuyển về "Chưa thanh toán".')) {
+      return;
+    }
+
+    try {
+      await PaymentsService.revertPaymentBatch(batchId);
+      alert('Đã đổi trạng thái thành công! Đợt chi trả đã được chuyển về "Nháp" và sẽ không còn hiển thị trong tab "Đợt chi trả".');
+      // Reload data
+      await loadUnpaidReports();
+      await loadPaymentBatches(1, true);
+    } catch (error: any) {
+      console.error('Error reverting batch:', error);
+      alert(`Có lỗi khi đổi trạng thái: ${error.message || 'Vui lòng thử lại'}`);
+    }
+  };
+
   // Delete batch
   const handleDeleteBatch = async (batchId: string) => {
+    if (!window.confirm(`Bạn có chắc chắn muốn xóa đợt chi trả này? Tất cả payments và dữ liệu liên quan sẽ bị xóa.`)) {
+      return;
+    }
+
     try {
       await PaymentsService.deleteBatch(batchId);
       alert('Xóa đợt chi trả thành công!');
       // Reload data
-      await loadUnpaidTransactions();
+      await loadUnpaidReports();
       await loadPaymentBatches(1, true);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error deleting batch:', error);
-      alert('Có lỗi khi xóa đợt chi trả');
+      alert(`Có lỗi khi xóa đợt chi trả: ${error.message || 'Vui lòng thử lại'}`);
     }
   };
 
@@ -1386,17 +1429,23 @@ const Payouts: React.FC = () => {
                       </div>
                     </div>
                     
+                    <div className="flex items-center space-x-2">
+                      {batch.paymentStatus === 'PAID' && (
                     <button
-                      onClick={() => {
-                        if (window.confirm(`Bạn có chắc chắn muốn xóa đợt chi trả "${batch.name}"? Tất cả payments và dữ liệu liên quan sẽ bị xóa.`)) {
-                          handleDeleteBatch(batch.id);
-                        }
-                      }}
+                          onClick={() => handleRevertBatch(batch.id)}
+                          className="flex items-center space-x-2 px-3 py-2 bg-yellow-100 text-yellow-700 rounded-lg hover:bg-yellow-200 transition-colors"
+                        >
+                          <span>Revert</span>
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleDeleteBatch(batch.id)}
                       className="flex items-center space-x-2 px-3 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors"
                     >
                       <Trash2 className="w-4 h-4" />
                       <span>Xóa</span>
                     </button>
+                    </div>
                   </div>
                 </div>
               </div>

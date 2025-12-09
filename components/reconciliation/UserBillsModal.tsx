@@ -3,6 +3,7 @@ import { X, Calendar, Filter, Clock, CheckCircle, XCircle, AlertCircle, Plus, Ed
 import { UserService } from '../../src/lib/userServices';
 import { useRealtimeData, FirebaseUtils } from '../../src/lib/firebaseHooks';
 import type { UserBill, PaymentMethod, ReportRecord } from '../../types';
+import { getBillImageUrl, isBillImageExpired } from '../../src/utils/billImageUtils';
 
 interface UserBillsModalProps {
   userId: string;
@@ -82,43 +83,77 @@ const UserBillsModal: React.FC<UserBillsModalProps> = ({ userId, userName, isOpe
   };
 
   const getStatusBadge = (bill: UserBill) => {
-    // Check if bill has been reconciled but unmatched
+    // Check if bill has been reconciled
     const reportRecord = reportRecordsByBillId.get(bill.id);
-    if (reportRecord && reportRecord.status === 'UNMATCHED') {
-      // Đã đối soát nhưng chưa khớp - hiển thị "Chưa khớp"
-      return (
-        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
-          <AlertCircle className="w-3 h-3 mr-1" />
-          Chưa khớp
-        </span>
-      );
-    }
     
-    // Otherwise use bill status
-    switch (bill.status) {
-      case 'MATCHED':
+    if (reportRecord) {
+      // Bill đã có ReportRecord
+      // Kiểm tra xem có merchant data không (merchantTransactionId, merchantAmount, hoặc merchantsFileData)
+      const hasMerchantData = !!(
+        reportRecord.merchantTransactionId || 
+        reportRecord.merchantAmount || 
+        reportRecord.merchantsFileData ||
+        reportRecord.merchantCode ||
+        reportRecord.merchantPointOfSaleName ||
+        reportRecord.merchantBranchName
+      );
+      
+      if (hasMerchantData) {
+        // Đã có merchant data → hiển thị status dựa trên reconciliationStatus
+        if (reportRecord.reconciliationStatus === 'MATCHED' || reportRecord.status === 'MATCHED') {
+          // Đã khớp
         return (
           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
             <CheckCircle className="w-3 h-3 mr-1" />
             Khớp
           </span>
         );
-      case 'ERROR':
+        } else if (reportRecord.reconciliationStatus === 'ERROR' || reportRecord.status === 'ERROR') {
+          // Đã có merchant nhưng không khớp - hiển thị "Chưa khớp"
+          return (
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+              <XCircle className="w-3 h-3 mr-1" />
+              Chưa khớp
+            </span>
+          );
+        } else {
+          // UNMATCHED nhưng đã có merchant data → hiển thị "Chưa khớp" (không phải "Chờ đối soát")
         return (
           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
             <XCircle className="w-3 h-3 mr-1" />
-            Lỗi
+              Chưa khớp
+            </span>
+          );
+        }
+      } else {
+        // Chưa có merchant data
+        if (reportRecord.reconciliationStatus === 'UNMATCHED') {
+          // Chưa có merchant transaction - hiển thị "Chờ đối soát"
+          return (
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+              <Clock className="w-3 h-3 mr-1" />
+              Chờ đối soát
+            </span>
+          );
+        } else if (reportRecord.reconciliationStatus === 'MATCHED' || reportRecord.status === 'MATCHED') {
+          // Đã khớp
+          return (
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+              <CheckCircle className="w-3 h-3 mr-1" />
+              Khớp
           </span>
         );
-      case 'PENDING':
-      default:
+        }
+      }
+    }
+    
+    // Bill chưa có ReportRecord - chưa có merchant transaction
         return (
           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
             <Clock className="w-3 h-3 mr-1" />
             Chờ đối soát
           </span>
         );
-    }
   };
 
   const handleAddBill = () => {
@@ -398,16 +433,31 @@ const UserBillsModal: React.FC<UserBillsModalProps> = ({ userId, userName, isOpe
                                     <span className="font-medium text-slate-600">Agent Code:</span>
                                     <span className="ml-2 text-slate-900">{bill.agentCode}</span>
                                   </div>
-                                  {bill.imageUrl && (
+                                  {(() => {
+                                    const imageUrl = getBillImageUrl(bill);
+                                    const expired = isBillImageExpired(bill);
+                                    
+                                    if (imageUrl) {
+                                      return (
                                     <div className="col-span-2">
                                       <span className="font-medium text-slate-600">Ảnh bill:</span>
                                       <img 
-                                        src={bill.imageUrl} 
+                                            src={imageUrl} 
                                         alt="Bill" 
                                         className="mt-2 max-w-xs rounded-lg border border-slate-200"
                                       />
                                     </div>
-                                  )}
+                                      );
+                                    } else if (expired) {
+                                      return (
+                                        <div className="col-span-2">
+                                          <span className="font-medium text-slate-600">Ảnh bill:</span>
+                                          <p className="mt-2 text-sm text-slate-500 italic">Quá hạn 1 tuần, hệ thống đã xoá</p>
+                                        </div>
+                                      );
+                                    }
+                                    return null;
+                                  })()}
                                 </div>
                         </td>
                       </tr>

@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Calendar, Filter, Plus, Edit, Trash2, X, Save, AlertCircle, CheckCircle, Clock } from 'lucide-react';
+import { Calendar, Trash2, X, AlertCircle, CheckCircle, Clock } from 'lucide-react';
 import { UserService } from '../../src/lib/userServices';
+import { ReportService } from '../../src/lib/reportServices';
 import { useRealtimeData, FirebaseUtils } from '../../src/lib/firebaseHooks';
-import { PaymentMethod } from '../../types';
 import type { UserBill, Agent, UserBillSession, ReportRecord } from '../../types';
+import { cleanupExpiredBillImages } from '../../src/utils/billImageUtils';
 
 const BillHistory: React.FC = () => {
   const userAuth = localStorage.getItem('userAuth');
@@ -24,17 +25,81 @@ const BillHistory: React.FC = () => {
     });
   }, [agents, allBills, userId]);
   
-  // Map billId -> ReportRecord để check status đối soát
+  // TRUY VẤN TRỰC TIẾP TỪ BẢNG BÁO CÁO: Dùng getAllReportRecordsWithMerchants như AdminReport
+  const [reportRecordsFromDB, setReportRecordsFromDB] = useState<ReportRecord[]>([]);
+  
+  useEffect(() => {
+    const loadReportRecords = async () => {
+      if (!userId) return;
+      
+      try {
+        console.log(`📊 [BillHistory] Querying report records from database (getAllReportRecordsWithMerchants) for userId: ${userId}...`);
+        const result = await ReportService.getAllReportRecordsWithMerchants({
+          userId,
+          dateFrom: undefined,
+          dateTo: undefined,
+          status: undefined,
+          agentId: undefined,
+          agentCode: undefined,
+          pointOfSaleName: undefined
+        }, {
+          limit: 10000
+        });
+        
+        console.log(`📊 [BillHistory] Got ${result.records.length} report records from getAllReportRecordsWithMerchants`);
+        
+        // Debug: Log sample ReportRecords
+        if (result.records.length > 0) {
+          console.log(`📊 [BillHistory] Sample ReportRecords:`, result.records.slice(0, 5).map((r: ReportRecord) => ({
+            id: r.id,
+            userBillId: r.userBillId,
+            transactionCode: r.transactionCode,
+            merchantTransactionId: r.merchantTransactionId,
+            merchantAmount: r.merchantAmount,
+            hasMerchantsFileData: !!(r.merchantsFileData && Object.keys(r.merchantsFileData).length > 0),
+            reconciliationStatus: r.reconciliationStatus || r.status
+          })));
+        }
+        
+        setReportRecordsFromDB(result.records);
+      } catch (error) {
+        console.error('[BillHistory] Error loading report records:', error);
+      }
+    };
+    
+    loadReportRecords();
+  }, [userId]);
+  
+  // Map billId -> ReportRecord và transactionCode -> ReportRecord từ data đã query
   const reportRecordsByBillId = useMemo(() => {
-    const records = FirebaseUtils.objectToArray(reportRecordsData || {});
     const map: Record<string, ReportRecord> = {};
-    records.forEach((record: ReportRecord) => {
+    reportRecordsFromDB.forEach((record: ReportRecord) => {
       if (record.userBillId) {
         map[record.userBillId] = record;
       }
     });
+    console.log(`📊 [BillHistory] Mapped ${Object.keys(map).length} ReportRecords by billId`);
     return map;
-  }, [reportRecordsData]);
+  }, [reportRecordsFromDB]);
+  
+  // Map transactionCode -> ReportRecord
+  const reportRecordsByTransactionCode = useMemo(() => {
+    const map: Record<string, ReportRecord> = {};
+    reportRecordsFromDB.forEach((record: ReportRecord) => {
+      if (record.transactionCode) {
+        const code = String(record.transactionCode).trim();
+        if (code) {
+          // Ưu tiên record có userBillId hoặc merchantTransactionId
+          const existing = map[code];
+          if (!existing || record.userBillId || record.merchantTransactionId) {
+            map[code] = record;
+          }
+        }
+      }
+    });
+    console.log(`📊 [BillHistory] Mapped ${Object.keys(map).length} ReportRecords by transactionCode`);
+    return map;
+  }, [reportRecordsFromDB]);
 
   // Helper function to get today's date in YYYY-MM-DD format
   const getTodayDate = () => {
@@ -51,20 +116,9 @@ const BillHistory: React.FC = () => {
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [loadingBills, setLoadingBills] = useState(false);
 
-  // Modal state
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingBill, setEditingBill] = useState<UserBill | null>(null);
+  // Modal state (only for delete confirmation, no edit)
   const [deletingBillId, setDeletingBillId] = useState<string | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [formData, setFormData] = useState({
-    transactionCode: '',
-    amount: '',
-    paymentMethod: PaymentMethod.QR_VNPAY,
-    pointOfSaleName: '',
-    invoiceNumber: '',
-    timestamp: new Date().toISOString()
-  });
 
   // Load sessions when agent and date are selected
   useEffect(() => {
@@ -109,7 +163,16 @@ const BillHistory: React.FC = () => {
       setLoadingBills(true);
       try {
         const bills = await UserService.getBillsBySession(userId, selectedSessionId);
-        setSessionBills(bills);
+        
+        // Auto-cleanup expired bill images
+        if (bills.length > 0) {
+          await cleanupExpiredBillImages(bills);
+          // Reload after cleanup
+          const billsAfterCleanup = await UserService.getBillsBySession(userId, selectedSessionId);
+          setSessionBills(billsAfterCleanup);
+        } else {
+          setSessionBills(bills);
+        }
       } catch (error: any) {
         console.error('Error loading bills:', error);
         setSessionBills([]);
@@ -153,26 +216,88 @@ const BillHistory: React.FC = () => {
   };
 
   const getStatusBadge = (bill: UserBill) => {
-    // Check từ report_records trước (source of truth cho đối soát)
-    const reportRecord = reportRecordsByBillId[bill.id];
+    // Tìm ReportRecord bằng userBillId trước (ưu tiên)
+    let reportRecord = reportRecordsByBillId[bill.id];
+    
+    // TRUY VẤN TRỰC TIẾP: Tìm bằng transactionCode (exact match)
+    if (!reportRecord && bill.transactionCode) {
+      const code = String(bill.transactionCode).trim();
+      if (code) {
+        reportRecord = reportRecordsByTransactionCode[code];
+        
+        if (reportRecord) {
+          console.log(`✅ [BillHistory] Found ReportRecord ${reportRecord.id} for bill ${bill.id} by transactionCode: ${code}`, {
+            hasMerchantAmount: !!reportRecord.merchantAmount,
+            merchantAmount: reportRecord.merchantAmount,
+            hasMerchantsFileData: !!(reportRecord.merchantsFileData && Object.keys(reportRecord.merchantsFileData).length > 0),
+            merchantTransactionId: reportRecord.merchantTransactionId,
+            reconciliationStatus: reportRecord.reconciliationStatus || reportRecord.status
+          });
+        } else {
+          console.log(`❌ [BillHistory] No ReportRecord found for bill ${bill.id} with transactionCode: ${code}`);
+          // Debug: Kiểm tra xem có ReportRecord nào có transactionCode tương tự không
+          const similarCodes = Object.keys(reportRecordsByTransactionCode).filter(k => k.includes(code) || code.includes(k));
+          if (similarCodes.length > 0) {
+            console.log(`⚠️ [BillHistory] Found similar transactionCodes:`, similarCodes);
+          }
+        }
+      }
+    }
     
     if (reportRecord) {
-      // Có ReportRecord = đã được đối soát
-      switch (reportRecord.status) {
-        case 'MATCHED':
-          return <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">Đã đối soát</span>;
-        case 'ERROR':
-          return <span className="px-2 py-1 bg-red-100 text-red-800 rounded-full text-xs font-medium">Lỗi đối soát</span>;
-        case 'UNMATCHED':
-          return <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded-full text-xs font-medium">Chưa khớp</span>;
-        default:
-          return <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded-full text-xs font-medium">Chờ đối soát</span>;
+      // Kiểm tra đã match mã chuẩn chi với file merchants:
+      // 1. Có merchantTransactionId (đã match với merchant transaction)
+      // 2. HOẶC có merchantsFileData (thông tin từ file Excel) VÀ transactionCode match
+      const hasMerchantTransactionId = !!reportRecord.merchantTransactionId;
+      const hasMerchantsFileData = !!(
+        reportRecord.merchantsFileData && 
+        Object.keys(reportRecord.merchantsFileData).length > 0
+      );
+      
+      // Kiểm tra transactionCode match (exact match, đơn giản)
+      const transactionCodeMatch = String(reportRecord.transactionCode).trim() === String(bill.transactionCode).trim();
+      
+      console.log(`🔍 [BillHistory] Bill ${bill.id} (${bill.transactionCode}):`, {
+        hasMerchantTransactionId,
+        hasMerchantsFileData,
+        transactionCodeMatch,
+        merchantAmount: reportRecord.merchantAmount,
+        reconciliationStatus: reportRecord.reconciliationStatus || reportRecord.status
+      });
+      
+      // Đã match mã chuẩn chi nếu:
+      // - Có merchantTransactionId, HOẶC
+      // - Có merchantsFileData VÀ transactionCode match
+      const hasMatchedMerchantTransaction = hasMerchantTransactionId || 
+        (hasMerchantsFileData && transactionCodeMatch);
+      
+      if (hasMatchedMerchantTransaction) {
+        // Đã match mã chuẩn chi → hiển thị trạng thái từ reconciliationStatus hoặc status
+        const status = reportRecord.reconciliationStatus || reportRecord.status;
+        switch (status) {
+          case 'MATCHED':
+          case 'DONE':
+            return <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">Đã đối soát</span>;
+          case 'ERROR':
+            return <span className="px-2 py-1 bg-red-100 text-red-800 rounded-full text-xs font-medium">Lỗi đối soát</span>;
+          case 'UNMATCHED':
+            return <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded-full text-xs font-medium">Chưa khớp</span>;
+          case 'PENDING':
+            return <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded-full text-xs font-medium">Chờ đối soát</span>;
+          default:
+            // Có match mã chuẩn chi nhưng status không rõ → coi như đã đối soát
+            return <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">Đã đối soát</span>;
+        }
       }
+      
+      // Chưa match mã chuẩn chi → Chờ đối soát
+      return <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded-full text-xs font-medium">Chờ đối soát</span>;
     }
     
     // Fallback về bill.status nếu chưa có ReportRecord
     switch (bill.status) {
       case 'MATCHED':
+      case 'DONE':
         return <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">Đã đối soát</span>;
       case 'ERROR':
         return <span className="px-2 py-1 bg-red-100 text-red-800 rounded-full text-xs font-medium">Lỗi</span>;
@@ -191,37 +316,8 @@ const BillHistory: React.FC = () => {
       return true;
     }
     
-    // Fallback về logic cũ
-    return bill.status === 'MATCHED' || 
-           bill.isPaidByAgent === true || 
-           (bill.status === 'ERROR' && bill.merchantData !== undefined) ||
-           (bill.merchantData !== undefined && bill.merchantData !== null);
-  };
-
-  const handleAddBill = () => {
-    setEditingBill(null);
-    setFormData({
-      transactionCode: '',
-      amount: '',
-      paymentMethod: PaymentMethod.QR_VNPAY,
-      pointOfSaleName: '',
-      invoiceNumber: '',
-      timestamp: new Date().toISOString()
-    });
-    setIsModalOpen(true);
-  };
-
-  const handleEditBill = (bill: UserBill) => {
-    setEditingBill(bill);
-    setFormData({
-      transactionCode: bill.transactionCode,
-      amount: bill.amount.toString(),
-      paymentMethod: bill.paymentMethod,
-      pointOfSaleName: bill.pointOfSaleName || '',
-      invoiceNumber: bill.invoiceNumber || '',
-      timestamp: bill.timestamp || bill.createdAt
-    });
-    setIsModalOpen(true);
+    // Also lock if bill status is not PENDING (already reconciled)
+    return bill.status !== 'PENDING';
   };
 
   const handleDeleteBill = (billId: string) => {
@@ -247,104 +343,6 @@ const BillHistory: React.FC = () => {
     }
   };
 
-  const handleSaveBill = async () => {
-    if (!userId) return;
-
-    // Validation
-    if (!formData.transactionCode.trim()) {
-      alert('Vui lòng nhập mã giao dịch');
-      return;
-    }
-
-    const amount = parseFloat(formData.amount);
-    if (isNaN(amount) || amount <= 0) {
-      alert('Vui lòng nhập số tiền hợp lệ');
-      return;
-    }
-
-    setIsSaving(true);
-    try {
-      // Check duplicate transaction code (if creating new)
-      if (!editingBill) {
-        const isDuplicate = await UserService.checkTransactionCodeExists(formData.transactionCode);
-        if (isDuplicate) {
-          alert(`Mã giao dịch ${formData.transactionCode} đã tồn tại`);
-          setIsSaving(false);
-          return;
-        }
-      } else {
-        // If editing, exclude current bill from duplicate check
-        const isDuplicate = await UserService.checkTransactionCodeExists(formData.transactionCode, editingBill.id);
-        if (isDuplicate) {
-          alert(`Mã giao dịch ${formData.transactionCode} đã tồn tại`);
-          setIsSaving(false);
-          return;
-        }
-      }
-
-      const billData: Partial<UserBill> = {
-        transactionCode: formData.transactionCode.trim(),
-        amount: amount,
-        paymentMethod: formData.paymentMethod,
-        pointOfSaleName: formData.pointOfSaleName.trim() || undefined,
-        invoiceNumber: formData.invoiceNumber.trim() || undefined,
-        timestamp: formData.timestamp
-      };
-
-      if (editingBill) {
-        // Update existing bill
-        await UserService.updateUserBill(editingBill.id, billData);
-        // Reload bills if a session is selected
-        if (selectedSessionId && userId) {
-          const bills = await UserService.getBillsBySession(userId, selectedSessionId);
-          setSessionBills(bills);
-        }
-      } else {
-        // Create new bill - need agentId
-        if (selectedAgent === 'all' || !selectedAgent) {
-          alert('Vui lòng chọn đại lý trước khi thêm bill');
-          setIsSaving(false);
-          return;
-        }
-        const agent = agents.find(a => a.id === selectedAgent);
-        if (!agent) {
-          alert('Không tìm thấy đại lý');
-          setIsSaving(false);
-          return;
-        }
-
-        await UserService.createUserBill({
-          ...billData,
-          userId,
-          agentId: selectedAgent,
-          agentCode: agent.code,
-          status: 'PENDING',
-          isPaidByAgent: false,
-          imageUrl: '', // Manual bills don't have images
-          createdAt: FirebaseUtils.getServerTimestamp()
-        } as Omit<UserBill, 'id'>);
-        
-        // Reload sessions to include the new bill
-        if (selectedDate && userId) {
-          const agentId = selectedAgent === 'all' ? null : selectedAgent;
-          const sessionsData = await UserService.getUserBillSessionsByAgentAndDate(
-            userId,
-            agentId,
-            selectedDate
-          );
-          setSessions(sessionsData);
-        }
-      }
-
-      setIsModalOpen(false);
-      setEditingBill(null);
-    } catch (error: any) {
-      console.error('Error saving bill:', error);
-      alert(error.message || 'Đã xảy ra lỗi khi lưu bill');
-    } finally {
-      setIsSaving(false);
-    }
-  };
 
   if (!userId) {
     return <div>Vui lòng đăng nhập</div>;
@@ -354,13 +352,6 @@ const BillHistory: React.FC = () => {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-slate-800">Lịch Sử Bill</h2>
-        <button
-          onClick={handleAddBill}
-          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition-colors"
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          Thêm bill
-        </button>
       </div>
 
       {/* Filters */}
@@ -550,32 +541,18 @@ const BillHistory: React.FC = () => {
                             {getStatusBadge(bill)}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm">
-                            <div className="flex items-center space-x-2">
-                              <button
-                                onClick={() => handleEditBill(bill)}
-                                disabled={locked}
-                                className={`p-2 rounded-lg transition-colors ${
-                                  locked
-                                    ? 'text-slate-300 cursor-not-allowed'
-                                    : 'text-indigo-600 hover:bg-indigo-50'
-                                }`}
-                                title={locked ? 'Bill đã được đối soát hoặc thanh toán, không thể chỉnh sửa' : 'Chỉnh sửa'}
-                              >
-                                <Edit className="w-4 h-4" />
-                              </button>
+                            {!locked && (
                               <button
                                 onClick={() => handleDeleteBill(bill.id)}
-                                disabled={locked}
-                                className={`p-2 rounded-lg transition-colors ${
-                                  locked
-                                    ? 'text-slate-300 cursor-not-allowed'
-                                    : 'text-red-600 hover:bg-red-50'
-                                }`}
-                                title={locked ? 'Bill đã được đối soát hoặc thanh toán, không thể xóa' : 'Xóa'}
+                                className="p-2 rounded-lg transition-colors text-red-600 hover:bg-red-50"
+                                title="Xóa"
                               >
                                 <Trash2 className="w-4 h-4" />
                               </button>
-                            </div>
+                            )}
+                            {locked && (
+                              <span className="text-xs text-slate-400">Đã khóa</span>
+                            )}
                           </td>
                         </tr>
                       );
@@ -585,123 +562,6 @@ const BillHistory: React.FC = () => {
               </table>
             </div>
           )}
-        </div>
-      )}
-
-      {/* Bill Form Modal */}
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold text-slate-900">
-                {editingBill ? 'Chỉnh sửa Bill' : 'Thêm Bill mới'}
-              </h3>
-              <button
-                onClick={() => setIsModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Mã giao dịch <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={formData.transactionCode}
-                  onChange={(e) => setFormData({ ...formData, transactionCode: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Số tiền (VND) <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="number"
-                  value={formData.amount}
-                  onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
-                  required
-                  min="0"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Loại bill <span className="text-red-500">*</span>
-                </label>
-                <select
-                  value={formData.paymentMethod}
-                  onChange={(e) => setFormData({ ...formData, paymentMethod: e.target.value as PaymentMethod })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
-                >
-                  <option value={PaymentMethod.QR_VNPAY}>QR 1 (VNPay)</option>
-                  <option value={PaymentMethod.QR_BANK}>QR 2 (App Bank)</option>
-                  <option value={PaymentMethod.POS}>POS</option>
-                  <option value={PaymentMethod.SOFPOS}>Sofpos</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Điểm thu
-                </label>
-                <input
-                  type="text"
-                  value={formData.pointOfSaleName}
-                  onChange={(e) => setFormData({ ...formData, pointOfSaleName: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Số hóa đơn
-                </label>
-                <input
-                  type="text"
-                  value={formData.invoiceNumber}
-                  onChange={(e) => setFormData({ ...formData, invoiceNumber: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Thời gian giao dịch
-                </label>
-                <input
-                  type="datetime-local"
-                  value={formData.timestamp ? new Date(formData.timestamp).toISOString().slice(0, 16) : ''}
-                  onChange={(e) => setFormData({ ...formData, timestamp: new Date(e.target.value).toISOString() })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end space-x-3 mt-6">
-              <button
-                onClick={() => setIsModalOpen(false)}
-                className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors"
-              >
-                Hủy
-              </button>
-              <button
-                onClick={handleSaveBill}
-                disabled={isSaving}
-                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center space-x-2"
-              >
-                <Save className="w-4 h-4" />
-                <span>{isSaving ? 'Đang lưu...' : 'Lưu'}</span>
-              </button>
-            </div>
-          </div>
         </div>
       )}
 

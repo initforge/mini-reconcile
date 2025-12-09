@@ -8,7 +8,6 @@ interface PendingBillsSummary {
   userName: string;
   userPhone: string;
   pendingCount: number;
-  matchedCount: number;
 }
 
 interface PendingBillsPanelProps {
@@ -99,9 +98,6 @@ const PendingBillsPanel: React.FC<PendingBillsPanelProps> = ({ onUserClick }) =>
                         Chờ đối soát
                       </th>
                       <th className="px-4 py-3 text-center text-xs font-medium text-slate-500 uppercase">
-                        Đã khớp
-                      </th>
-                      <th className="px-4 py-3 text-center text-xs font-medium text-slate-500 uppercase">
                         Thao tác
                       </th>
                     </tr>
@@ -121,11 +117,6 @@ const PendingBillsPanel: React.FC<PendingBillsPanelProps> = ({ onUserClick }) =>
                         <td className="px-4 py-3 text-center">
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
                             {item.pendingCount}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                            {item.matchedCount}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-center">

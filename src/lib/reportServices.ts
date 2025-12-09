@@ -2,7 +2,9 @@
 import { ref, get, push, update, remove } from 'firebase/database';
 import { database } from './firebase';
 import { FirebaseUtils } from './firebaseHooks';
-import type { ReportRecord, ReportStatus, AdminPaymentStatus, AgentPaymentStatus } from '../../types';
+import type { ReportRecord, ReportStatus, AdminPaymentStatus, AgentPaymentStatus, UserBill, MerchantTransaction } from '../../types';
+import { MerchantTransactionsService } from './firebaseServices';
+import { UserService } from './userServices';
 
 export interface ReportRecordFilters {
   userId?: string;
@@ -156,6 +158,255 @@ export const ReportService = {
       records: paginatedRecords,
       nextCursor,
       total: records.length
+    };
+  },
+
+  /**
+   * Lấy TẤT CẢ merchant_transactions và merge với report_records
+   * Logic mới: Hiển thị TẤT CẢ merchant transactions, không phụ thuộc vào phiên
+   * - Nếu có matching bill: dùng report_record hoặc tạo virtual
+   * - Nếu không có bill: tạo virtual ReportRecord với merchant data, phần bill để trống
+   */
+  async getAllReportRecordsWithMerchants(
+    filters: ReportRecordFilters,
+    options?: PaginationOptions
+  ): Promise<PaginatedReportResult> {
+    // Load TẤT CẢ merchant_transactions
+    const merchantSnapshot = await get(ref(database, 'merchant_transactions'));
+    const allMerchantTransactions = FirebaseUtils.objectToArray<MerchantTransaction>(merchantSnapshot.val() || {});
+
+    // Load TẤT CẢ report_records
+    const reportSnapshot = await get(ref(database, 'report_records'));
+    const allReportRecords = FirebaseUtils.objectToArray<ReportRecord>(reportSnapshot.val() || {});
+
+    // Load TẤT CẢ user_bills để match
+    const billsSnapshot = await get(ref(database, 'user_bills'));
+    const allBills = FirebaseUtils.objectToArray<UserBill>(billsSnapshot.val() || {});
+
+    // Tạo map: merchantTransactionId -> ReportRecord
+    const reportByMerchantId = new Map<string, ReportRecord>();
+    allReportRecords.forEach(report => {
+      if (report.merchantTransactionId) {
+        reportByMerchantId.set(report.merchantTransactionId, report);
+      }
+    });
+
+    // Tạo map: transactionCode -> UserBill[] (có thể có nhiều bills cùng transactionCode)
+    const billsByTransactionCode = new Map<string, UserBill[]>();
+    allBills.forEach(bill => {
+      if (bill.transactionCode) {
+        if (!billsByTransactionCode.has(bill.transactionCode)) {
+          billsByTransactionCode.set(bill.transactionCode, []);
+        }
+        billsByTransactionCode.get(bill.transactionCode)!.push(bill);
+      }
+    });
+
+    // Tạo Set để track các merchant transaction IDs đã được xử lý
+    const processedMerchantIds = new Set<string>();
+
+    // Tạo TẤT CẢ ReportRecords từ merchant_transactions
+    const allRecords: ReportRecord[] = [];
+
+    // Bước 1: Thêm tất cả ReportRecords hiện có (đã có merchantTransactionId)
+    allReportRecords.forEach(report => {
+      if (report.merchantTransactionId) {
+        processedMerchantIds.add(report.merchantTransactionId);
+        allRecords.push(report);
+      }
+    });
+
+    // Bước 2: Với mỗi merchant transaction chưa có ReportRecord, tạo virtual ReportRecord
+    for (const merchant of allMerchantTransactions) {
+      if (processedMerchantIds.has(merchant.id)) {
+        continue; // Đã có ReportRecord, skip
+      }
+
+      // Bỏ qua merchant transaction không có transactionCode hoặc transactionCode rỗng
+      if (!merchant.transactionCode || merchant.transactionCode.trim() === '') {
+        continue; // Skip merchant transactions without valid transactionCode
+      }
+
+      // Bỏ qua merchant transaction không có amount hoặc amount = 0
+      if (!merchant.amount || isNaN(merchant.amount) || merchant.amount <= 0) {
+        continue; // Skip merchant transactions without valid amount
+      }
+
+      // Chưa có ReportRecord, tạo virtual ReportRecord từ merchant transaction
+      // Tìm matching bill nếu có
+      const matchingBills = billsByTransactionCode.get(merchant.transactionCode) || [];
+      let matchedBill: UserBill | undefined;
+      let status: ReportStatus = 'UNMATCHED';
+      let errorMessage: string = '';
+      let reconciliationStatus: 'PENDING' | 'MATCHED' | 'ERROR' | 'UNMATCHED' = 'UNMATCHED';
+
+      if (matchingBills.length > 0) {
+        // Tìm bill match tốt nhất (theo amount và pointOfSaleName)
+        matchedBill = matchingBills.find(bill => {
+          const amountMatch = Math.abs((merchant.amountBeforeDiscount || merchant.amount) - bill.amount) < 1;
+          const posMatch = (!merchant.pointOfSaleName && !bill.pointOfSaleName) ||
+                          (merchant.pointOfSaleName && bill.pointOfSaleName &&
+                           merchant.pointOfSaleName === bill.pointOfSaleName);
+          return amountMatch && posMatch;
+        });
+
+        if (matchedBill) {
+          // Có bill match
+          const amountMatch = Math.abs((merchant.amountBeforeDiscount || merchant.amount) - matchedBill.amount) < 1;
+          const posMatch = (!merchant.pointOfSaleName && !matchedBill.pointOfSaleName) ||
+                          (merchant.pointOfSaleName && matchedBill.pointOfSaleName &&
+                           merchant.pointOfSaleName === matchedBill.pointOfSaleName);
+
+          if (amountMatch && posMatch) {
+            status = 'MATCHED';
+            reconciliationStatus = 'MATCHED';
+            errorMessage = '';
+          } else {
+            status = 'ERROR';
+            reconciliationStatus = 'ERROR';
+            const errors: string[] = [];
+            if (!amountMatch) {
+              errors.push(`Sai số tiền: ${(merchant.amountBeforeDiscount || merchant.amount).toLocaleString('vi-VN')}đ vs ${matchedBill.amount.toLocaleString('vi-VN')}đ`);
+            }
+            if (!posMatch) {
+              const merchantPos = merchant.pointOfSaleName || '(không có)';
+              const billPos = matchedBill.pointOfSaleName || '(không có)';
+              errors.push(`Sai điểm bán: ${merchantPos} vs ${billPos}`);
+            }
+            errorMessage = `Chưa khớp - ${errors.join('; ')}`;
+          }
+        } else {
+          // Có bills nhưng không match
+          status = 'ERROR';
+          reconciliationStatus = 'ERROR';
+          errorMessage = 'Có bill nhưng không khớp (sai số tiền hoặc điểm bán)';
+        }
+      } else {
+        // Không có bill
+        status = 'UNMATCHED';
+        reconciliationStatus = 'UNMATCHED';
+        errorMessage = 'Chưa có bill hoặc không tìm thấy mã chuẩn chi trong bills';
+      }
+
+      // Tạo virtual ReportRecord
+      // Lưu ý: Nếu không có bill (matchedBill = undefined), phần "Thông tin từ Bill" sẽ để trống
+      const virtualRecord: ReportRecord = {
+        id: `virtual_${merchant.id}`, // Virtual ID
+        userBillId: matchedBill?.id, // undefined nếu không có bill
+        userId: matchedBill?.userId, // undefined nếu không có bill
+        agentId: matchedBill?.agentId, // undefined nếu không có bill
+        agentCode: matchedBill?.agentCode, // undefined nếu không có bill
+        transactionCode: matchedBill?.transactionCode || merchant.transactionCode, // Lấy từ bill nếu có, fallback merchant (để hiển thị trong merchant column)
+        amount: matchedBill?.amount || merchant.amount, // Ưu tiên bill amount, fallback merchant amount
+        paymentMethod: matchedBill?.paymentMethod || 'QR_VNPAY',
+        pointOfSaleName: matchedBill?.pointOfSaleName, // undefined nếu không có bill
+        transactionDate: merchant.transactionDate || matchedBill?.timestamp || new Date().toISOString(),
+        userBillCreatedAt: matchedBill?.createdAt, // undefined nếu không có bill
+        invoiceNumber: matchedBill?.invoiceNumber, // undefined nếu không có bill
+        merchantTransactionId: merchant.id,
+        merchantCode: merchant.merchantCode,
+        merchantAmount: merchant.amount,
+        merchantAmountBeforeDiscount: merchant.amountBeforeDiscount,
+        merchantPointOfSaleName: merchant.pointOfSaleName,
+        merchantBranchName: merchant.branchName,
+        merchantInvoiceNumber: merchant.invoiceNumber,
+        merchantPhoneNumber: merchant.phoneNumber,
+        merchantPromotionCode: merchant.promotionCode,
+        merchantTransactionDate: merchant.transactionDate,
+        status,
+        reconciliationStatus,
+        errorMessage: errorMessage || undefined,
+        merchantsFileData: merchant.rawData,
+        reconciledAt: FirebaseUtils.getServerTimestamp(),
+        reconciledBy: 'ADMIN',
+        createdAt: merchant.createdAt || FirebaseUtils.getServerTimestamp()
+      };
+
+      allRecords.push(virtualRecord);
+      processedMerchantIds.add(merchant.id);
+    }
+
+    // Bước 3: Thêm các ReportRecords không có merchantTransactionId (từ bills cũ, không có merchant data)
+    // Nhưng chỉ thêm nếu chưa có trong allRecords (tránh duplicate) và có dữ liệu hợp lệ
+    const existingRecordIds = new Set(allRecords.map(r => r.id));
+    allReportRecords.forEach(report => {
+      if (!report.merchantTransactionId && !existingRecordIds.has(report.id)) {
+        // Chỉ thêm nếu có transactionCode hợp lệ và amount hợp lệ
+        const hasValidTransactionCode = report.transactionCode && report.transactionCode.trim() !== '';
+        const hasValidAmount = report.amount && !isNaN(report.amount) && report.amount > 0;
+        
+        if (hasValidTransactionCode && hasValidAmount) {
+          // ReportRecord từ bill nhưng chưa có merchant transaction
+          // Vẫn hiển thị để đảm bảo không mất dữ liệu
+          allRecords.push(report);
+        }
+      }
+    });
+
+    // Apply filters
+    let filteredRecords = allRecords;
+    if (filters.userId) {
+      filteredRecords = filteredRecords.filter(r => r.userId === filters.userId);
+    }
+    if (filters.agentId) {
+      filteredRecords = filteredRecords.filter(r => r.agentId === filters.agentId);
+    }
+    if (filters.agentCode) {
+      filteredRecords = filteredRecords.filter(r => r.agentCode === filters.agentCode);
+    }
+    if (filters.status) {
+      filteredRecords = filteredRecords.filter(r => r.status === filters.status);
+    }
+    if (filters.pointOfSaleName) {
+      filteredRecords = filteredRecords.filter(r => 
+        r.pointOfSaleName === filters.pointOfSaleName || 
+        r.merchantPointOfSaleName === filters.pointOfSaleName
+      );
+    }
+    if (filters.dateFrom || filters.dateTo) {
+      filteredRecords = filteredRecords.filter(r => {
+        const dateToCheck = r.transactionDate || r.userBillCreatedAt || r.reconciledAt || r.createdAt || r.merchantTransactionDate;
+        if (!dateToCheck) return true;
+        
+        try {
+          const dateStr = typeof dateToCheck === 'string' ? dateToCheck : dateToCheck.toISOString();
+          const recordDate = dateStr.split('T')[0];
+          if (filters.dateFrom && recordDate < filters.dateFrom) return false;
+          if (filters.dateTo && recordDate > filters.dateTo) return false;
+          return true;
+        } catch (error) {
+          console.warn(`Error parsing date for record ${r.id}:`, error);
+          return true;
+        }
+      });
+    }
+
+    // Sort by createdAt descending (newest first)
+    filteredRecords.sort((a, b) => {
+      const dateA = new Date(a.createdAt || a.merchantTransactionDate || 0).getTime();
+      const dateB = new Date(b.createdAt || b.merchantTransactionDate || 0).getTime();
+      return dateB - dateA;
+    });
+
+    // Apply pagination
+    const limit = options?.limit || 10000;
+    let paginatedRecords = filteredRecords;
+    
+    if (options?.cursor) {
+      const cursorIndex = filteredRecords.findIndex(r => r.id === options.cursor);
+      if (cursorIndex >= 0) {
+        paginatedRecords = filteredRecords.slice(cursorIndex + 1, cursorIndex + 1 + limit);
+      } else {
+        paginatedRecords = filteredRecords.slice(0, limit);
+      }
+    } else {
+      paginatedRecords = filteredRecords.slice(0, limit);
+    }
+
+    return {
+      records: paginatedRecords,
+      nextCursor: undefined,
+      total: filteredRecords.length
     };
   },
 
@@ -387,6 +638,125 @@ export const ReportService = {
   async deleteReportRecord(recordId: string): Promise<void> {
     const recordRef = ref(database, `report_records/${recordId}`);
     await remove(recordRef);
+  },
+
+  /**
+   * Auto-reconcile bill when it's created
+   * Creates ReportRecord immediately with MATCHED/ERROR/UNMATCHED status
+   */
+  async autoReconcileBill(userBill: UserBill): Promise<void> {
+    try {
+      // Check if ReportRecord already exists for this bill
+      const existingRecordsSnapshot = await get(ref(database, 'report_records'));
+      const existingRecords = FirebaseUtils.objectToArray<ReportRecord>(existingRecordsSnapshot.val() || {});
+      const existingRecord = existingRecords.find(r => r.userBillId === userBill.id);
+      
+      if (existingRecord) {
+        console.log(`ReportRecord already exists for bill ${userBill.id}, skipping auto-reconciliation`);
+        return;
+      }
+
+      // Look up merchant transaction by transaction code
+      const merchantTransaction = await MerchantTransactionsService.getByTransactionCode(userBill.transactionCode);
+      
+      const timestamp = FirebaseUtils.getServerTimestamp();
+      let reconciliationStatus: 'PENDING' | 'MATCHED' | 'ERROR' | 'UNMATCHED';
+      let errorMessage: string = '';
+      let merchantsFileData: Record<string, any> | undefined;
+      let merchantAmount: number | undefined;
+      let merchantTransactionId: string | undefined;
+      let status: ReportStatus = 'UNMATCHED';
+
+      if (!merchantTransaction) {
+        // No merchant transaction found
+        reconciliationStatus = 'UNMATCHED';
+        status = 'UNMATCHED';
+        errorMessage = 'Chưa có file merchants hoặc không tìm thấy mã chuẩn chi trong merchants';
+        merchantsFileData = undefined;
+        merchantAmount = undefined;
+      } else {
+        // Merchant transaction found - compare fields
+        merchantTransactionId = merchantTransaction.id;
+        merchantsFileData = merchantTransaction.rawData;
+        merchantAmount = merchantTransaction.amount;
+        
+        // Compare amount (allow 1 VND difference for rounding)
+        const amountMatch = Math.abs(merchantTransaction.amount - userBill.amount) < 1;
+        
+        // Compare point of sale (if both exist)
+        const posMatch = 
+          (!merchantTransaction.pointOfSaleName && !userBill.pointOfSaleName) ||
+          (merchantTransaction.pointOfSaleName && userBill.pointOfSaleName && 
+           merchantTransaction.pointOfSaleName === userBill.pointOfSaleName);
+        
+        if (amountMatch && posMatch) {
+          // All fields match
+          reconciliationStatus = 'MATCHED';
+          status = 'MATCHED';
+          errorMessage = '';
+        } else {
+          // Mismatch - build clear error message
+          reconciliationStatus = 'ERROR';
+          status = 'ERROR';
+          const errors: string[] = [];
+          
+          if (!amountMatch) {
+            errors.push(`Sai số tiền: ${merchantTransaction.amount.toLocaleString('vi-VN')}đ vs ${userBill.amount.toLocaleString('vi-VN')}đ`);
+          }
+          
+          if (!posMatch) {
+            const merchantPos = merchantTransaction.pointOfSaleName || '(không có)';
+            const billPos = userBill.pointOfSaleName || '(không có)';
+            errors.push(`Sai điểm bán: ${merchantPos} vs ${billPos}`);
+          }
+          
+          errorMessage = `Chưa khớp - ${errors.join('; ')}`;
+        }
+      }
+
+      // Create ReportRecord
+      const reportRecord: Omit<ReportRecord, 'id' | 'createdAt'> = {
+        userBillId: userBill.id,
+        userId: userBill.userId,
+        agentId: userBill.agentId,
+        agentCode: userBill.agentCode,
+        transactionCode: userBill.transactionCode,
+        amount: userBill.amount,
+        paymentMethod: userBill.paymentMethod,
+        pointOfSaleName: userBill.pointOfSaleName,
+        transactionDate: userBill.timestamp,
+        userBillCreatedAt: userBill.createdAt,
+        invoiceNumber: userBill.invoiceNumber,
+        
+        // Merchant data
+        merchantTransactionId,
+        merchantCode: merchantTransaction?.merchantCode,
+        merchantAmount,
+        merchantAmountBeforeDiscount: merchantTransaction?.amountBeforeDiscount,
+        merchantPointOfSaleName: merchantTransaction?.pointOfSaleName,
+        merchantBranchName: merchantTransaction?.branchName,
+        merchantInvoiceNumber: merchantTransaction?.invoiceNumber,
+        merchantPhoneNumber: merchantTransaction?.phoneNumber,
+        merchantPromotionCode: merchantTransaction?.promotionCode,
+        merchantTransactionDate: merchantTransaction?.transactionDate,
+        
+        // Reconciliation result
+        status,
+        reconciliationStatus,
+        errorMessage: errorMessage || undefined,
+        merchantsFileData,
+        
+        // Metadata
+        reconciledAt: timestamp,
+        reconciledBy: 'ADMIN'
+      };
+
+      await this.createReportRecord(reportRecord);
+      console.log(`✅ Auto-reconciled bill ${userBill.id}: ${reconciliationStatus}`);
+    } catch (error) {
+      console.error(`Error auto-reconciling bill ${userBill.id}:`, error);
+      // Don't throw - just log the error so bill creation doesn't fail
+    }
   }
 };
 

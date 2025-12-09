@@ -33,7 +33,7 @@ const UserLayout: React.FC = () => {
     <div className="flex min-h-screen bg-slate-50">
       <UserSidebar activeTab={getActiveTab()} onLogout={handleLogout} />
       
-      <main className="flex-1 ml-64 p-8 overflow-y-auto h-screen" style={{ position: 'relative', zIndex: 1 }}>
+      <main className="flex-1 md:ml-64 p-4 md:p-8 overflow-y-auto h-screen" style={{ position: 'relative', zIndex: 1 }}>
         <header className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">

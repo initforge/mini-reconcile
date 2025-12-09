@@ -94,11 +94,11 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         onLogout={handleLogout}
       />
       
-      <main className="flex-1 ml-64 p-8 overflow-y-auto h-screen" style={{ position: 'relative', zIndex: 1 }}>
+      <main className="flex-1 md:ml-64 p-4 md:p-8 overflow-y-auto h-screen" style={{ position: 'relative', zIndex: 1 }}>
         {/* Header */}
-        <header className="flex justify-between items-center mb-8">
+        <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 md:mb-8">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">
+            <h1 className="text-xl md:text-2xl font-bold text-slate-900">
               {currentPath === 'reconciliation' && 'Trung tâm đối soát'}
               {currentPath === 'personnel' && 'Quản lý nhân sự'}
               {currentPath === 'merchants' && 'Danh sách Điểm bán'}
@@ -110,10 +110,10 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             <p className="text-sm text-slate-500 mt-1">{new Date().toLocaleDateString('vi-VN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
           </div>
           
-          <div className="flex items-center space-x-4">
-             <div className="bg-white border border-slate-200 rounded-lg px-4 py-2 flex items-center text-sm text-slate-600 shadow-sm">
+          <div className="flex items-center space-x-4 w-full sm:w-auto">
+             <div className="bg-white border border-slate-200 rounded-lg px-3 md:px-4 py-2 flex items-center text-xs md:text-sm text-slate-600 shadow-sm">
                <span className="w-2 h-2 rounded-full bg-green-500 mr-2"></span>
-               Hệ thống hoạt động: Bình thường
+               <span className="hidden sm:inline">Hệ thống hoạt động: </span>Bình thường
              </div>
           </div>
         </header>

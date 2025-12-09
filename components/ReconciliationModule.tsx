@@ -6,18 +6,18 @@ import { ReconciliationRecord, TransactionStatus, PaymentMethod, MerchantTransac
 import { generateMockFiles } from '../constants';
 import { generateReconciliationReport, extractTransactionFromImage } from '../services/geminiService';
 import { ReconciliationService, SettingsService, PaymentsService, MerchantTransactionsService } from '../src/lib/firebaseServices';
-import { AgentReconciliationService } from '../src/lib/agentReconciliationServices';
 import { ReportService } from '../src/lib/reportServices';
 import { UserService } from '../src/lib/userServices';
-import { get, ref } from 'firebase/database';
+import { AgentReconciliationService } from '../src/lib/agentReconciliationServices';
+import { get, ref, update } from 'firebase/database';
 import { database } from '../src/lib/firebase';
+import { useRealtimeData, FirebaseUtils } from '../src/lib/firebaseHooks';
+import type { UserBill, ReportRecord, ReportStatus } from '../types';
 import { createStyledWorkbook, createStyledSheet, addMetadataSheet, exportWorkbook, identifyNumberColumns, identifyDateColumns } from '../src/utils/excelExportUtils';
 import * as XLSX from 'xlsx';
 import { parseExcel, findKey, parseAmount, normalize, guessTransactionCode } from '../src/utils/excelParserUtils';
-import { useRealtimeData, FirebaseUtils } from '../src/lib/firebaseHooks';
 import PendingBillsPanel from './reconciliation/PendingBillsPanel';
 import UserBillsModal from './reconciliation/UserBillsModal';
-import type { UserBill, ReportRecord, ReportStatus } from '../types';
 
 const ReconciliationModule: React.FC = () => {
   const [step, setStep] = useState<0 | 1 | 2>(0); // Step 0: Upload merchants, Step 1: Process, Step 2: Results
@@ -78,22 +78,9 @@ const ReconciliationModule: React.FC = () => {
   // Point of sale assignment state (khi OCR không tìm thấy)
   const [assigningPOS, setAssigningPOS] = useState<{ index: number; pointOfSaleName?: string } | null>(null);
   
-  // Session và History State
+  // Session State
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [sessionHistory, setSessionHistory] = useState<ReconciliationSession[]>([]);
-  const [showHistory, setShowHistory] = useState(false);
-  const [loadingHistory, setLoadingHistory] = useState(false);
   
-  // Tab navigation state
-  const [activeTab, setActiveTab] = useState<'reconciliation' | 'history'>('reconciliation');
-  const [selectedHistoryDate, setSelectedHistoryDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  
-  // Pagination state for session history (lazy loading)
-  const [historyPage, setHistoryPage] = useState(1);
-  const historyItemsPerPage = 5;
-  const [historyHasMore, setHistoryHasMore] = useState(false);
-  const [historyTotal, setHistoryTotal] = useState(0);
-  const [allLoadedHistory, setAllLoadedHistory] = useState<ReconciliationSession[]>([]);
 
   // Refs for hidden file inputs
   const merchantInputRef = useRef<HTMLInputElement>(null);
@@ -104,88 +91,6 @@ const ReconciliationModule: React.FC = () => {
   const [showUserBillsModal, setShowUserBillsModal] = useState(false);
   const [currentUploadSessionId, setCurrentUploadSessionId] = useState<string | null>(null);
 
-  // Load session history on component mount (lazy loading - chỉ load trang đầu)
-  useEffect(() => {
-    loadSessionHistory(1, true);
-  }, []);
-
-  const loadSessionHistory = async (page: number = 1, reset: boolean = false) => {
-    try {
-      setLoadingHistory(true);
-      
-      // Load paginated history
-      const { sessions, hasMore, total } = await ReconciliationService.getSessionHistory(page, historyItemsPerPage);
-      
-      // Load records cho mỗi session để tính chính xác stats
-      const historyWithRealStats = await Promise.all(sessions.map(async (session) => {
-        try {
-          const records = await ReconciliationService.getRecordsBySession(session.id);
-          const matchedCount = records.filter(r => r.status === TransactionStatus.MATCHED).length;
-          const errorCount = records.filter(r => 
-            r.status === TransactionStatus.ERROR_AMOUNT || 
-            r.status === TransactionStatus.ERROR_DUPLICATE
-          ).length;
-          const missingCount = records.filter(r => 
-            r.status === TransactionStatus.MISSING_IN_MERCHANT || 
-            r.status === TransactionStatus.MISSING_IN_AGENT || 
-            r.status === TransactionStatus.ERROR_DUPLICATE
-          ).length;
-          const totalAmount = records.reduce((sum, r) => sum + (r.merchantData?.amount || 0), 0);
-          
-          return {
-            ...session,
-            totalRecords: records.length,
-            matchedCount,
-            errorCount,
-            missingCount,
-            totalAmount
-          };
-        } catch (e) {
-          console.warn(`⚠️ Không thể load records cho session ${session.id}:`, e);
-          return session;
-        }
-      }));
-      
-      if (reset) {
-        // Reset: chỉ giữ trang mới
-        setAllLoadedHistory(historyWithRealStats);
-        setSessionHistory(historyWithRealStats);
-      } else {
-        // Append: thêm vào danh sách đã load, nhưng chỉ hiển thị trang hiện tại
-        const updatedHistory = [...allLoadedHistory, ...historyWithRealStats];
-        setAllLoadedHistory(updatedHistory);
-        // Chỉ hiển thị trang hiện tại (page)
-        const startIndex = (page - 1) * historyItemsPerPage;
-        const endIndex = startIndex + historyItemsPerPage;
-        setSessionHistory(updatedHistory.slice(startIndex, endIndex));
-      }
-      
-      setHistoryHasMore(hasMore);
-      setHistoryTotal(total);
-    } catch (error) {
-      console.error('Error loading session history:', error);
-    } finally {
-      setLoadingHistory(false);
-    }
-  };
-  
-  const handleHistoryPageChange = async (newPage: number) => {
-    setHistoryPage(newPage);
-    // Nếu trang mới chưa được load, load nó
-    const maxLoadedPage = Math.ceil(allLoadedHistory.length / historyItemsPerPage);
-    if (newPage > maxLoadedPage && historyHasMore) {
-      await loadSessionHistory(newPage, false);
-    } else {
-      // Hiển thị dữ liệu đã load
-      const startIndex = (newPage - 1) * historyItemsPerPage;
-      const endIndex = startIndex + historyItemsPerPage;
-      setSessionHistory(allLoadedHistory.slice(startIndex, endIndex));
-    }
-  };
-  
-  // Calculate pagination for session history (lazy loading - chỉ hiển thị trang hiện tại)
-  const historyTotalPages = Math.ceil(historyTotal / historyItemsPerPage);
-  const paginatedHistory = sessionHistory; // Đã được filter theo trang trong loadSessionHistory
 
   // Helper to get status details với errorType chi tiết
   const getStatusBadge = (record: ReconciliationRecord) => {
@@ -255,6 +160,17 @@ const ReconciliationModule: React.FC = () => {
         }
 
         const mappedData: (MerchantTransaction | null)[] = rawData.map((row: any, index) => {
+          // Store all columns from Excel in rawData
+          // Sanitize keys to remove Firebase-invalid characters: '.', '#', '$', '/', '[', ']'
+          const sanitizeKey = (key: string): string => {
+            return key.replace(/[.#$/\[\]]/g, '_');
+          };
+          const rawDataObj: Record<string, any> = {};
+          Object.keys(row).forEach(key => {
+            const sanitizedKey = sanitizeKey(key);
+            rawDataObj[sanitizedKey] = row[key];
+          });
+          
           // Process same as single file but with file source tracking
           // Extract point of sale information TRƯỚC để tránh lấy nhầm
           const pointOfSaleName = findKey(row, ['điểm thu', 'tên điểm thu', 'point of sale', 'pos name', 'collection point']);
@@ -558,7 +474,8 @@ const ReconciliationModule: React.FC = () => {
             invoiceNumber: invoiceNumber ? String(invoiceNumber) : undefined,
             phoneNumber: phoneNumber ? String(phoneNumber) : undefined,
             promotionCode: promotionCode ? String(promotionCode) : undefined,
-            rawRowIndex: index
+            rawRowIndex: index,
+            rawData: rawDataObj // Store all Excel columns
           };
         });
 
@@ -677,12 +594,195 @@ const ReconciliationModule: React.FC = () => {
           invoiceNumber: item.invoiceNumber || undefined,
           phoneNumber: item.phoneNumber || undefined,
           promotionCode: item.promotionCode || undefined,
-          rawRowIndex: item.rawRowIndex // Preserve rawRowIndex if available
+          rawRowIndex: item.rawRowIndex, // Preserve rawRowIndex if available
+          rawData: item.rawData // Preserve all Excel columns
         };
       });
       
-      await MerchantTransactionsService.createBatch(transactionsToSave);
-      console.log(`✅ Saved ${transactionsToSave.length} merchant transactions with uploadSessionId: ${uploadSessionId}`);
+      const result = await MerchantTransactionsService.createBatch(transactionsToSave);
+      console.log(`✅ Saved ${result.created.length} merchant transactions with uploadSessionId: ${uploadSessionId}`);
+      if (result.skipped.length > 0) {
+        console.warn(`⚠️ Đã bỏ qua ${result.skipped.length} giao dịch do mã chuẩn chi trùng lặp:`);
+        result.skipped.forEach(s => console.warn(`   - ${s.transactionCode}: ${s.reason}`));
+        alert(`Đã lưu ${result.created.length} giao dịch. Bỏ qua ${result.skipped.length} giao dịch do mã chuẩn chi trùng lặp.`);
+      }
+      
+      // Tự động đối soát TẤT CẢ bills với merchant transactions vừa upload
+      // Khi upload merchant file, tìm tất cả bills có transactionCode match và tạo/update ReportRecord
+      try {
+        console.log('🔄 Triggering auto-reconciliation for ALL bills with matching transaction codes...');
+        const billsSnapshot = await get(ref(database, 'user_bills'));
+        const reportsSnapshot = await get(ref(database, 'report_records'));
+        const allBills = FirebaseUtils.objectToArray(billsSnapshot.val() || {});
+        const allReports = FirebaseUtils.objectToArray(reportsSnapshot.val() || {}) as ReportRecord[];
+        
+        // Tạo map report_records by userBillId và by transactionCode
+        const reportsByBillId = new Map<string, ReportRecord>();
+        const reportsByTransactionCode = new Map<string, ReportRecord>();
+        allReports.forEach((report: ReportRecord) => {
+          if (report.userBillId) {
+            reportsByBillId.set(report.userBillId, report);
+          }
+          if (report.transactionCode) {
+            reportsByTransactionCode.set(String(report.transactionCode).trim(), report);
+          }
+        });
+        
+        // Tạo map merchant transactions by transactionCode từ transactions vừa upload
+        const merchantByCode = new Map<string, MerchantTransaction>();
+        uniqueData.forEach((mt: MerchantTransaction) => {
+          if (mt.transactionCode) {
+            merchantByCode.set(String(mt.transactionCode).trim(), mt);
+          }
+        });
+        
+        // Tìm TẤT CẢ bills có transactionCode match với merchant transactions vừa upload
+        const billsToReconcile = allBills.filter((bill: UserBill) => {
+          if (!bill.transactionCode) return false;
+          const code = String(bill.transactionCode).trim();
+          return merchantByCode.has(code);
+        });
+        
+        console.log(`📋 Found ${billsToReconcile.length} bills with matching transaction codes to reconcile`);
+        console.log(`📋 Merchant transactions in map: ${merchantByCode.size}`);
+        
+        // Tạo ReportRecords TRỰC TIẾP - không dùng autoReconcileBill
+        const reportRecordsToCreate: Array<Omit<ReportRecord, 'id' | 'createdAt'>> = [];
+        const reportRecordsToUpdate: Array<{ id: string; updates: any }> = [];
+        const now = FirebaseUtils.getServerTimestamp();
+        let reMatchedCount = 0;
+        let reErrorCount = 0;
+        
+        for (const bill of billsToReconcile) {
+          try {
+            const code = String(bill.transactionCode).trim();
+            const merchantTransaction = merchantByCode.get(code);
+            
+            if (!merchantTransaction) {
+              console.warn(`⚠️ No merchant transaction found for code: ${code}`);
+              continue;
+            }
+            
+            // Tìm ReportRecord hiện có
+            let report = reportsByBillId.get(bill.id);
+            if (!report && code) {
+              report = reportsByTransactionCode.get(code);
+            }
+            
+            // So sánh amount và pointOfSaleName
+            const amountMatch = Math.abs((merchantTransaction.amountBeforeDiscount || merchantTransaction.amount) - bill.amount) < 1;
+            const posMatch = 
+              (!merchantTransaction.pointOfSaleName && !bill.pointOfSaleName) ||
+              (merchantTransaction.pointOfSaleName && bill.pointOfSaleName && 
+               merchantTransaction.pointOfSaleName === bill.pointOfSaleName);
+            
+            let reconciliationStatus: 'PENDING' | 'MATCHED' | 'ERROR' | 'UNMATCHED';
+            let errorMessage: string = '';
+            
+            if (amountMatch && posMatch) {
+              reconciliationStatus = 'MATCHED';
+              reMatchedCount++;
+            } else {
+              reconciliationStatus = 'ERROR';
+              const errors: string[] = [];
+              if (!amountMatch) {
+                errors.push(`Sai số tiền: ${merchantTransaction.amount.toLocaleString('vi-VN')}đ vs ${bill.amount.toLocaleString('vi-VN')}đ`);
+              }
+              if (!posMatch) {
+                const merchantPos = merchantTransaction.pointOfSaleName || '(không có)';
+                const billPos = bill.pointOfSaleName || '(không có)';
+                errors.push(`Sai điểm bán: ${merchantPos} vs ${billPos}`);
+              }
+              errorMessage = `Chưa khớp - ${errors.join('; ')}`;
+              reErrorCount++;
+            }
+            
+            if (report) {
+              // ReportRecord đã tồn tại → update
+              reportRecordsToUpdate.push({
+                id: report.id,
+                updates: {
+                  merchantTransactionId: merchantTransaction.id,
+                  merchantCode: merchantTransaction.merchantCode,
+                  merchantAmount: merchantTransaction.amount,
+                  merchantAmountBeforeDiscount: merchantTransaction.amountBeforeDiscount,
+                  merchantPointOfSaleName: merchantTransaction.pointOfSaleName,
+                  merchantBranchName: merchantTransaction.branchName,
+                  merchantInvoiceNumber: merchantTransaction.invoiceNumber,
+                  merchantPhoneNumber: merchantTransaction.phoneNumber,
+                  merchantPromotionCode: merchantTransaction.promotionCode,
+                  merchantTransactionDate: merchantTransaction.transactionDate,
+                  merchantsFileData: merchantTransaction.rawData,
+                  reconciliationStatus: reconciliationStatus,
+                  status: reconciliationStatus,
+                  errorMessage: errorMessage || null,
+                  reconciledAt: now
+                }
+              });
+            } else {
+              // ReportRecord chưa tồn tại → tạo mới TRỰC TIẾP
+              reportRecordsToCreate.push({
+                userBillId: bill.id,
+                userId: bill.userId,
+                agentId: bill.agentId,
+                agentCode: bill.agentCode,
+                transactionCode: bill.transactionCode,
+                amount: bill.amount,
+                paymentMethod: bill.paymentMethod,
+                pointOfSaleName: bill.pointOfSaleName,
+                transactionDate: bill.timestamp || bill.createdAt,
+                userBillCreatedAt: bill.createdAt,
+                invoiceNumber: bill.invoiceNumber,
+                merchantTransactionId: merchantTransaction.id,
+                merchantCode: merchantTransaction.merchantCode,
+                merchantAmount: merchantTransaction.amount,
+                merchantAmountBeforeDiscount: merchantTransaction.amountBeforeDiscount,
+                merchantPointOfSaleName: merchantTransaction.pointOfSaleName,
+                merchantBranchName: merchantTransaction.branchName,
+                merchantInvoiceNumber: merchantTransaction.invoiceNumber,
+                merchantPhoneNumber: merchantTransaction.phoneNumber,
+                merchantPromotionCode: merchantTransaction.promotionCode,
+                merchantTransactionDate: merchantTransaction.transactionDate,
+                merchantsFileData: merchantTransaction.rawData,
+                status: reconciliationStatus,
+                reconciliationStatus: reconciliationStatus,
+                errorMessage: errorMessage || undefined,
+                reconciledAt: now,
+                reconciledBy: 'ADMIN'
+              });
+            }
+          } catch (error) {
+            console.error(`Error processing bill ${bill.id}:`, error);
+          }
+        }
+        
+        // Update existing ReportRecords
+        if (reportRecordsToUpdate.length > 0) {
+          console.log(`📝 Updating ${reportRecordsToUpdate.length} existing ReportRecords...`);
+          const { ReportService } = await import('../src/lib/reportServices');
+          for (const { id, updates } of reportRecordsToUpdate) {
+            await update(ref(database, `report_records/${id}`), updates);
+          }
+          console.log(`✅ Updated ${reportRecordsToUpdate.length} ReportRecords`);
+        }
+        
+        // Create new ReportRecords in batch
+        if (reportRecordsToCreate.length > 0) {
+          console.log(`📝 Creating ${reportRecordsToCreate.length} new ReportRecords...`);
+          const { ReportService } = await import('../src/lib/reportServices');
+          await ReportService.createReportRecords(reportRecordsToCreate);
+          console.log(`✅ Created ${reportRecordsToCreate.length} ReportRecords`);
+        }
+        
+        if (billsToReconcile.length > 0) {
+          console.log(`✅ Auto-reconciled ${billsToReconcile.length} bills: ${reMatchedCount} matched, ${reErrorCount} errors`);
+        } else {
+          console.log('ℹ️ No bills found with matching transaction codes');
+        }
+      } catch (error) {
+        console.error('Error triggering auto-reconciliation:', error);
+        // Don't fail the upload if re-reconciliation fails
+      }
       
       // Reset input sau khi xử lý thành công để có thể upload lại
       if (merchantInputRef.current) {
@@ -1379,7 +1479,7 @@ const ReconciliationModule: React.FC = () => {
   // State để hiển thị aggregated data
   const [currentSessionData, setCurrentSessionData] = useState<ReconciliationSession | null>(null);
 
-  // Load session cũ để xem lại
+  // Load session cũ để xem lại (kept for backward compatibility but not used in UI)
   const loadHistorySession = async (sessionId: string) => {
     try {
       setIsLoading(true);
@@ -1532,11 +1632,10 @@ const ReconciliationModule: React.FC = () => {
     }
   };
 
-  // Xóa phiên đối soát
+  // Xóa phiên đối soát (kept for backward compatibility but not used in UI)
   const handleDeleteSession = async (sessionId: string) => {
     try {
       await ReconciliationService.deleteSession(sessionId);
-      await loadSessionHistory(1, true); // Reload history from page 1
       if (currentSessionId === sessionId) {
         // Nếu đang xem session bị xóa, reset về step 1
         setStep(0);
@@ -1550,16 +1649,6 @@ const ReconciliationModule: React.FC = () => {
     }
   };
 
-  // Filter sessions by selected date
-  const filteredHistoryByDate = React.useMemo(() => {
-    if (!selectedHistoryDate) return sessionHistory;
-    const selectedDate = new Date(selectedHistoryDate).toISOString().split('T')[0];
-    return sessionHistory.filter(session => {
-      const sessionDate = new Date(session.createdAt).toISOString().split('T')[0];
-      return sessionDate === selectedDate;
-    });
-  }, [sessionHistory, selectedHistoryDate]);
-
   return (
     <div className="max-w-6xl mx-auto space-y-6">
       <div className="flex justify-between items-center">
@@ -1568,35 +1657,10 @@ const ReconciliationModule: React.FC = () => {
           <p className="text-slate-500">Quy trình tải lên Excel, ghép file và kiểm tra lỗi tự động.</p>
         </div>
         
-        {/* Tab Navigation */}
-        <div className="flex items-center space-x-2 bg-white rounded-lg border border-slate-200 p-1">
-          <button
-            onClick={() => setActiveTab('reconciliation')}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              activeTab === 'reconciliation'
-                ? 'bg-indigo-600 text-white'
-                : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            Đối soát
-          </button>
-          <button
-            onClick={() => setActiveTab('history')}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              activeTab === 'history'
-                ? 'bg-indigo-600 text-white'
-                : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            Lịch sử đối soát
-          </button>
-        </div>
       </div>
 
-      {/* Pending Bills Panel - Always visible in reconciliation tab */}
-      {activeTab === 'reconciliation' && (
+      {/* Pending Bills Panel - Always visible */}
         <PendingBillsPanel onUserClick={handleUserClick} />
-      )}
 
       {/* User Bills Modal */}
       {selectedUserId && (
@@ -1612,109 +1676,7 @@ const ReconciliationModule: React.FC = () => {
         />
       )}
 
-      {/* Tab Content: Lịch sử đối soát */}
-      {activeTab === 'history' && (
-        <div className="bg-white border border-slate-200 rounded-xl p-6">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-lg font-semibold text-slate-800">Lịch sử phiên đối soát</h3>
-            <div className="flex items-center space-x-4">
-              <label className="text-sm font-medium text-slate-700">Chọn ngày:</label>
-              <input
-                type="date"
-                value={selectedHistoryDate}
-                onChange={(e) => setSelectedHistoryDate(e.target.value)}
-                className="px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
-              />
-            </div>
-          </div>
-          
-          <div className="space-y-3">
-            {loadingHistory ? (
-              <div className="text-center py-8 text-slate-400">Đang tải lịch sử...</div>
-            ) : filteredHistoryByDate.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-slate-200">
-                  <thead className="bg-slate-50">
-                    <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Session ID</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Ngày</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">File</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Số bill</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Khớp</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Lỗi</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Trạng thái</th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-slate-200">
-                    {filteredHistoryByDate.map((session) => {
-                      const date = new Date(session.createdAt);
-                      const formattedDate = date.toLocaleDateString('vi-VN', {
-                        day: '2-digit',
-                        month: '2-digit',
-                        year: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit'
-                      });
-                      
-                      return (
-                        <tr key={session.id} className="hover:bg-slate-50">
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-slate-900">
-                            {session.id.substring(0, 8)}...
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
-                            {formattedDate}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
-                            <div className="flex items-center space-x-2">
-                              <FileText className="w-4 h-4" />
-                              <span>{session.merchantFileName}</span>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">
-                            {session.totalRecords}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="flex items-center space-x-1">
-                              <CheckCircle className="w-4 h-4 text-green-600" />
-                              <span className="text-sm font-medium text-green-600">{session.matchedCount}</span>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="flex items-center space-x-1">
-                              <AlertCircle className="w-4 h-4 text-red-600" />
-                              <span className="text-sm font-medium text-red-600">{session.errorCount}</span>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            {session.status === 'COMPLETED' ? (
-                              <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">
-                                Hoàn thành
-                              </span>
-                            ) : (
-                              <span className="px-2 py-1 bg-red-100 text-red-800 rounded-full text-xs font-medium">
-                                Lỗi
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="text-center py-8 text-slate-400">
-                <History className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                <p>Chưa có lịch sử đối soát cho ngày đã chọn</p>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Tab Content: Đối soát (workflow hiện tại) */}
-      {activeTab === 'reconciliation' && (
-        <>
+      {/* Reconciliation Workflow */}
           {/* Progress steps - chỉ hiển thị khi ở tab Đối soát */}
           {step > 0 && (
             <div className="flex justify-end">
@@ -1728,125 +1690,9 @@ const ReconciliationModule: React.FC = () => {
         </div>
           )}
 
-      {/* History Panel - Giữ lại để tương thích, nhưng ẩn khi ở tab history */}
-      {showHistory && activeTab === 'reconciliation' && (
-        <div className="bg-white border border-slate-200 rounded-xl p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-slate-800">Lịch sử phiên đối soát</h3>
-            <span className="text-sm text-slate-500">
-              Tổng: {historyTotal > 0 ? historyTotal : sessionHistory.length} phiên
-            </span>
-          </div>
-          <div className="space-y-3">
-            {loadingHistory ? (
-              <div className="text-center py-8 text-slate-400">Đang tải lịch sử...</div>
-            ) : paginatedHistory.length > 0 ? (
-              paginatedHistory.map((session) => {
-                const date = new Date(session.createdAt);
-                const formattedDate = date.toLocaleDateString('vi-VN', { 
-                  day: '2-digit', 
-                  month: '2-digit', 
-                  year: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit'
-                });
-                const formattedAmount = session.totalAmount > 0 
-                  ? `${(session.totalAmount / 1000000).toFixed(1)}M VND`
-                  : '0 VND';
-                
-                return (
-                  <div 
-                    key={session.id} 
-                    className="flex items-center justify-between p-4 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors group"
-                  >
-                    <div 
-                      className="flex items-center space-x-3 flex-1 cursor-pointer"
-                      onClick={() => loadHistorySession(session.id)}
-                    >
-                      {/* Status badge - chỉ hiển thị cho COMPLETED */}
-                      <span className="w-2 h-2 rounded-full flex-shrink-0 bg-emerald-500"></span>
-                      
-                      {/* Date */}
-                      <span className="text-sm font-medium text-slate-700 min-w-[140px]">
-                        {formattedDate}
-                      </span>
-                      
-                      {/* Amount */}
-                      <span className="text-sm font-semibold text-slate-900 min-w-[100px]">
-                        {formattedAmount}
-                      </span>
-                      
-                      {/* Stats */}
-                      <div className="flex items-center space-x-3 text-sm">
-                        <span className="text-emerald-600 font-medium">
-                          ✓ {session.matchedCount}
-                        </span>
-                        <span className="text-red-600 font-medium">
-                          ✗ {session.errorCount}
-                        </span>
-                        {(session as any).missingCount > 0 && (
-                          <span className="text-orange-600 font-medium">
-                            ⚠ {(session as any).missingCount}
-                          </span>
-                        )}
-                      </div>
-                      
-                      {/* Merchant info */}
-                      {session.merchantIds && session.merchantIds.length > 0 && (
-                        <div className="text-xs text-slate-500">
-                          {session.merchantIds.length} điểm bán
-                        </div>
-                      )}
-                    </div>
-                    
-                    <div className="flex items-center space-x-2">
-                      {/* Delete button */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (window.confirm('Bạn có chắc chắn muốn xóa phiên đối soát này? Tất cả dữ liệu liên quan sẽ bị xóa.')) {
-                            handleDeleteSession(session.id);
-                          }
-                        }}
-                        className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
-                        title="Xóa phiên đối soát"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })
-            ) : (
-              <div className="text-center py-8 text-slate-400">
-                <History className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                <p>Chưa có lịch sử đối soát</p>
-              </div>
-            )}
-          </div>
-          
-          {/* Pagination for history (lazy loading) */}
-          {historyTotal > historyItemsPerPage && (
-            <div className="mt-4">
-              <Pagination
-                currentPage={historyPage}
-                totalPages={historyTotalPages}
-                onPageChange={handleHistoryPageChange}
-                itemsPerPage={historyItemsPerPage}
-                totalItems={historyTotal}
-              />
-              {loadingHistory && (
-                <div className="text-center text-sm text-slate-500 mt-2">
-                  Đang tải thêm dữ liệu...
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
 
-      {/* Step 0: Upload Merchant Files - Chỉ hiển thị khi ở tab Đối soát */}
-      {activeTab === 'reconciliation' && step === 0 && (
+      {/* Step 0: Upload Merchant Files */}
+      {step === 0 && (
         <div className="space-y-6">
           <div className="flex justify-end">
             <button 
@@ -1978,8 +1824,8 @@ const ReconciliationModule: React.FC = () => {
       )}
 
 
-      {/* Step 2: Results - Chỉ hiển thị khi ở tab Đối soát */}
-      {activeTab === 'reconciliation' && step === 2 && (
+      {/* Step 2: Results */}
+      {step === 2 && (
         <div className="space-y-6">
           {/* Admin Reconciliation Results (New System) */}
           {adminReconciliationResults && (
@@ -2067,6 +1913,8 @@ const ReconciliationModule: React.FC = () => {
                   Đối soát mới
                  </button>
                </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -2406,10 +2254,6 @@ const ReconciliationModule: React.FC = () => {
                <Trash2 className="w-4 h-4 mr-1" /> Xóa & Bắt đầu phiên đối soát mới
              </button>
           </div>
-            </>
-          )}
-        </div>
-      )}
         </>
       )}
 

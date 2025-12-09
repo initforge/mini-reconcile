@@ -61,7 +61,12 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout }) => {
   const logoUrl = settings?.logoUrl;
 
   return (
-    <div className="w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white min-h-screen flex flex-col shadow-2xl fixed left-0 top-0 z-[100] border-r border-slate-700">
+    <>
+      {/* Mobile overlay */}
+      <div className="hidden md:block fixed inset-0 bg-black/50 z-[90] md:hidden" />
+      
+      {/* Sidebar */}
+      <div className="hidden md:flex w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white min-h-screen flex-col shadow-2xl fixed left-0 top-0 z-[100] border-r border-slate-700">
       <div className="p-6 border-b border-slate-700/50">
         <div className="flex items-center space-x-3">
           {logoUrl ? (
@@ -125,6 +130,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout }) => {
         </button>
       </div>
     </div>
+    </>
   );
 };
 

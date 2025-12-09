@@ -39,7 +39,7 @@ const UserSidebar: React.FC<UserSidebarProps> = ({ activeTab, onLogout }) => {
   };
 
   return (
-    <div className="w-64 bg-slate-900 text-white min-h-screen flex flex-col fixed left-0 top-0 z-[100] border-r border-slate-800">
+    <div className="hidden md:flex w-64 bg-slate-900 text-white min-h-screen flex-col fixed left-0 top-0 z-[100] border-r border-slate-800">
       <div className="p-6 border-b border-slate-800">
         <h1 className="text-xl font-bold">PayReconcile</h1>
         <p className="text-sm text-slate-400 mt-1">Người dùng</p>

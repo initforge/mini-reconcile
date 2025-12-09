@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { UserPlus, Search, Filter, Shield, Mail, Lock, UserCheck, Trash2, Edit2, X, Save, Key, DollarSign } from 'lucide-react';
+import { UserPlus, Search, Filter, Shield, Mail, Lock, UserCheck, Trash2, Edit2, X, Save, Key, DollarSign, Eye, EyeOff } from 'lucide-react';
 import { UserRole, UserStatus, User } from '../types';
 import { useRealtimeData, useFirebaseWrite, FirebaseUtils } from '../src/lib/firebaseHooks';
 
@@ -15,6 +15,7 @@ const Personnel: React.FC = () => {
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
   const [formData, setFormData] = useState({
     id: '',
     username: '',
@@ -288,14 +289,21 @@ const Personnel: React.FC = () => {
                   <label className="text-sm font-medium text-slate-700">Mật khẩu {editingUser && <span className="font-normal text-slate-400 text-xs">(Để trống nếu không đổi)</span>}</label>
                   <div className="relative">
                      <input
-                      type="password"
-                      className="w-full px-3 py-2 pl-9 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                      type={showPassword ? 'text' : 'password'}
+                      className="w-full px-3 py-2 pl-9 pr-10 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
                       placeholder={editingUser ? "••••••" : "Nhập mật khẩu"}
                       value={formData.password}
                       onChange={e => setFormData({...formData, password: e.target.value})}
                       required={!editingUser}
                     />
                     <Key className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+                    >
+                      {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                    </button>
                   </div>
                 </div>
               </div>

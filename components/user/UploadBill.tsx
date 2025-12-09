@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Upload, Image as ImageIcon, CheckCircle, AlertCircle, X, Loader, RefreshCw } from 'lucide-react';
+import { Upload, Image as ImageIcon, CheckCircle, AlertCircle, X, Loader, RefreshCw, HelpCircle, ExternalLink } from 'lucide-react';
 import { extractTransactionFromImage } from '../../services/geminiService';
 import { UserService } from '../../src/lib/userServices';
 import { useRealtimeData, FirebaseUtils } from '../../src/lib/firebaseHooks';
@@ -26,11 +26,19 @@ const UploadBill: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const agentCode = searchParams.get('agents');
-  const [agentLinkInput, setAgentLinkInput] = useState('');
+  const [geminiApiKey, setGeminiApiKey] = useState('');
   
   // Get user from localStorage
   const userAuth = localStorage.getItem('userAuth');
   const userId = userAuth ? JSON.parse(userAuth).userId : null;
+  
+  // Load Gemini API key from localStorage on mount
+  useEffect(() => {
+    const stored = localStorage.getItem('payreconcile:geminiApiKey');
+    if (stored) {
+      setGeminiApiKey(stored);
+    }
+  }, []);
 
   // Load agents to validate
   const { data: agentsData, loading: agentsLoading, error: agentsError } = useRealtimeData<Record<string, Agent>>('/agents');
@@ -81,22 +89,6 @@ const UploadBill: React.FC = () => {
     }
   }, [agentCode, agentsData, agentsLoading, agentsError, agents, userId, navigate]);
 
-  // Handle agent link paste
-  const handleAgentLinkPaste = () => {
-    const match = agentLinkInput.match(/agents=([^&]+)/);
-    if (match) {
-      const code = match[1];
-      const agent = agents.find(a => a.code?.trim().toUpperCase() === code.trim().toUpperCase());
-      if (agent) {
-        setSearchParams({ agents: agent.code });
-        setAgentLinkInput('');
-      } else {
-        setErrorMessage(`Không tìm thấy đại lý với mã: ${code}`);
-      }
-    } else {
-      setErrorMessage('Link không hợp lệ. Vui lòng dán link từ đại lý.');
-    }
-  };
 
   // Cleanup object URLs on unmount
   useEffect(() => {
@@ -114,6 +106,22 @@ const UploadBill: React.FC = () => {
 
   const processOCR = async (index: number) => {
     if (!selectedAgent) return;
+    
+    // Check if Gemini API key is set
+    if (!geminiApiKey.trim()) {
+      setBillPreviews(prev => {
+        const updated = [...prev];
+        if (updated[index]) {
+          updated[index] = {
+            ...updated[index],
+            ocrStatus: 'error',
+            ocrError: 'Vui lòng dán Gemini API key trước khi OCR'
+          };
+        }
+        return updated;
+      });
+      return;
+    }
 
     // Get preview data first
     let preview: BillPreview | undefined;
@@ -443,31 +451,14 @@ const UploadBill: React.FC = () => {
       </div>
 
       {/* Agent Selection / Info - Unified Panel */}
-      <div className="bg-white rounded-xl border border-slate-200 p-6">
+      <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
         {!selectedAgent ? (
-          <>
+          <div>
             <h3 className="text-lg font-semibold text-slate-900 mb-4">Chọn đại lý để upload bill</h3>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">
-                Dán link từ đại lý
-              </label>
-              <div className="flex space-x-2">
-                <input
-                  type="text"
-                  value={agentLinkInput}
-                  onChange={(e) => setAgentLinkInput(e.target.value)}
-                  placeholder="/user/upbill?agents=AG_test"
-                  className="flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
-                />
-                <button
-                  onClick={handleAgentLinkPaste}
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-                >
-                  Xác nhận
-                </button>
-              </div>
+            <p className="text-sm text-slate-600 mb-4">
+              Vui lòng sử dụng link từ đại lý với tham số ?agents=AG_XXX để chọn đại lý.
+            </p>
             </div>
-          </>
         ) : (
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
@@ -489,6 +480,47 @@ const UploadBill: React.FC = () => {
             </button>
           </div>
         )}
+        
+        {/* Gemini API Key Input - Always visible */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="block text-sm font-medium text-slate-700">
+              Gemini API key
+            </label>
+            <a
+              href="https://www.youtube.com/watch?v=JZCjL3hrvcY"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center space-x-2 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 hover:text-indigo-800 rounded-lg transition-colors text-sm font-medium border border-indigo-200 hover:border-indigo-300"
+            >
+              <HelpCircle className="w-4 h-4" />
+              <span>Hướng dẫn lấy API key</span>
+              <ExternalLink className="w-4 h-4" />
+            </a>
+          </div>
+          <input
+            type="password"
+            value={geminiApiKey}
+            onChange={(e) => {
+              const value = e.target.value;
+              setGeminiApiKey(value);
+              localStorage.setItem('payreconcile:geminiApiKey', value);
+            }}
+            placeholder="Nhập Gemini API key từ Google AI Studio (VD: AIzaSy...)"
+            className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 font-mono text-sm"
+          />
+          <p className="text-xs text-slate-500 mt-1">
+            API key để sử dụng tính năng OCR đọc ảnh VNPay. 
+            <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline ml-1">
+              Lấy API key tại đây
+            </a>
+          </p>
+          {!geminiApiKey.trim() && (
+            <p className="text-xs text-red-600 mt-1">
+              ⚠️ Vui lòng dán Gemini API key trước khi upload ảnh để sử dụng OCR
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Error Message */}

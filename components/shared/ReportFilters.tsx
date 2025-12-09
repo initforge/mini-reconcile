@@ -43,13 +43,13 @@ const ReportFilters: React.FC<ReportFiltersProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6">
+    <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4 md:p-6">
       <div className="flex items-center space-x-2 mb-4">
         <Filter className="w-5 h-5 text-slate-600" />
         <h2 className="text-lg font-semibold text-slate-900">Bộ lọc</h2>
       </div>
       
-      <div className={`grid grid-cols-1 gap-4 ${role === 'ADMIN' ? 'md:grid-cols-7' : role === 'AGENT' ? 'md:grid-cols-6' : 'md:grid-cols-4'}`}>
+      <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${role === 'ADMIN' ? 'lg:grid-cols-7' : role === 'AGENT' ? 'lg:grid-cols-6' : 'lg:grid-cols-4'}`}>
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-2">
             Từ ngày

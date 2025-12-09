@@ -18,6 +18,15 @@ export default defineConfig(({ mode }) => {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
+      },
+      optimizeDeps: {
+        include: ['xlsx-js-style'],
+        exclude: []
+      },
+      build: {
+        commonjsOptions: {
+          include: [/xlsx-js-style/, /node_modules/]
+        }
       }
     };
 });

@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Lock, Upload, QrCode, Save, AlertCircle, CheckCircle } from 'lucide-react';
+import { Upload, QrCode, Save, AlertCircle, CheckCircle } from 'lucide-react';
 import { UserService } from '../../src/lib/userServices';
-import { hashPassword } from '../../src/lib/authServices';
 import { useRealtimeData, FirebaseUtils } from '../../src/lib/firebaseHooks';
 import type { User } from '../../types';
 
@@ -12,12 +11,6 @@ const UserUtilities: React.FC = () => {
   const { data: usersData } = useRealtimeData<Record<string, User>>('/users');
   const users = FirebaseUtils.objectToArray(usersData || {});
   const currentUser = users.find(u => u.id === userId);
-
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [isChangingPassword, setIsChangingPassword] = useState(false);
-  const [passwordMessage, setPasswordMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const [selectedQRFile, setSelectedQRFile] = useState<File | null>(null);
   const [qrPreview, setQrPreview] = useState<string | null>(null);
@@ -50,39 +43,6 @@ const UserUtilities: React.FC = () => {
     };
   }, [qrPreview]);
 
-  const handleChangePassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsChangingPassword(true);
-    setPasswordMessage(null);
-
-    if (newPassword !== confirmPassword) {
-      setPasswordMessage({ type: 'error', text: 'Mật khẩu xác nhận không khớp' });
-      setIsChangingPassword(false);
-      return;
-    }
-
-    if (newPassword.length < 6) {
-      setPasswordMessage({ type: 'error', text: 'Mật khẩu phải có ít nhất 6 ký tự' });
-      setIsChangingPassword(false);
-      return;
-    }
-
-    try {
-      // In a real app, you'd verify current password first
-      // For now, we'll just update it
-      const hashedPassword = await hashPassword(newPassword);
-      await UserService.updateUser(userId!, { password: hashedPassword } as Partial<User>);
-      
-      setPasswordMessage({ type: 'success', text: 'Đổi mật khẩu thành công!' });
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-    } catch (error: any) {
-      setPasswordMessage({ type: 'error', text: error.message || 'Đã xảy ra lỗi khi đổi mật khẩu' });
-    } finally {
-      setIsChangingPassword(false);
-    }
-  };
 
   const handleQRFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -156,80 +116,6 @@ const UserUtilities: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Change Password */}
-      <div className="bg-white rounded-xl border border-slate-200 p-6">
-        <div className="flex items-center space-x-3 mb-6">
-          <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
-            <Lock className="w-5 h-5 text-indigo-600" />
-          </div>
-          <div>
-            <h2 className="text-lg font-semibold text-slate-900">Đổi mật khẩu</h2>
-            <p className="text-sm text-slate-500">Cập nhật mật khẩu đăng nhập của bạn</p>
-          </div>
-        </div>
-
-        <form onSubmit={handleChangePassword} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Mật khẩu hiện tại</label>
-            <input
-              type="password"
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
-              placeholder="Nhập mật khẩu hiện tại"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Mật khẩu mới</label>
-            <input
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
-              placeholder="Nhập mật khẩu mới (tối thiểu 6 ký tự)"
-              minLength={6}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Xác nhận mật khẩu mới</label>
-            <input
-              type="password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
-              placeholder="Nhập lại mật khẩu mới"
-              minLength={6}
-            />
-          </div>
-
-          {passwordMessage && (
-            <div className={`p-3 rounded-lg flex items-center space-x-2 ${
-              passwordMessage.type === 'success' 
-                ? 'bg-green-50 text-green-800 border border-green-200' 
-                : 'bg-red-50 text-red-800 border border-red-200'
-            }`}>
-              {passwordMessage.type === 'success' ? (
-                <CheckCircle className="w-5 h-5" />
-              ) : (
-                <AlertCircle className="w-5 h-5" />
-              )}
-              <p className="text-sm">{passwordMessage.text}</p>
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={isChangingPassword}
-            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            <Save className="w-4 h-4 mr-2" />
-            {isChangingPassword ? 'Đang lưu...' : 'Đổi mật khẩu'}
-          </button>
-        </form>
-      </div>
-
       {/* Upload QR Code */}
       <div className="bg-white rounded-xl border border-slate-200 p-6">
         <div className="flex items-center space-x-3 mb-6">

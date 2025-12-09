@@ -1,20 +1,69 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { CreditCard, CheckCircle, AlertCircle, Save, ChevronDown, ChevronUp, X, Search, Calendar, FileText, Clock, QrCode } from 'lucide-react';
+import { CreditCard, CheckCircle, AlertCircle, Save, ChevronDown, ChevronUp, X, Search, Calendar, FileText, Clock, QrCode, Image as ImageIcon } from 'lucide-react';
 import { useRealtimeData, FirebaseUtils } from '../../src/lib/firebaseHooks';
 import { ReportService } from '../../src/lib/reportServices';
 import { ref, push, update, get } from 'firebase/database';
 import { database } from '../../src/lib/firebase';
 import type { UserBill, AgentPaymentToUser, ReportRecord, User, AgentPaymentStatus } from '../../types';
 import Pagination from '../Pagination';
+import { cleanupExpiredBillImages, getBillImageUrl, isBillImageExpired } from '../../src/utils/billImageUtils';
 
 const AgentPayments: React.FC = () => {
   const agentAuth = localStorage.getItem('agentAuth');
   const agentId = agentAuth ? JSON.parse(agentAuth).agentId : null;
+  const agentCode = agentAuth ? JSON.parse(agentAuth).agentCode : null;
 
   const { data: usersData } = useRealtimeData<Record<string, User>>('/users');
   const { data: billsData } = useRealtimeData<Record<string, UserBill>>('/user_bills');
   const { data: agentPaymentsData } = useRealtimeData<Record<string, AgentPaymentToUser>>('/agent_payments_to_users');
   const users = FirebaseUtils.objectToArray(usersData || {});
+  
+  // TRUY VẤN TRỰC TIẾP TỪ BẢNG BÁO CÁO: Load ReportRecords từ getAllReportRecordsWithMerchants
+  const [reportRecordsFromDB, setReportRecordsFromDB] = useState<ReportRecord[]>([]);
+  
+  useEffect(() => {
+    const loadReportRecords = async () => {
+      if (!agentId || !agentCode) return;
+      
+      try {
+        console.log(`📊 [AgentPayments] Querying report records from database (getAllReportRecordsWithMerchants) for agent ${agentCode}...`);
+        const result = await ReportService.getAllReportRecordsWithMerchants({
+          agentCode,
+          agentId,
+          dateFrom: undefined,
+          dateTo: undefined,
+          status: undefined,
+          userId: undefined,
+          pointOfSaleName: undefined
+        }, {
+          limit: 10000
+        });
+        
+        console.log(`📊 [AgentPayments] Got ${result.records.length} report records from getAllReportRecordsWithMerchants`);
+        
+        // Debug: Log sample ReportRecords
+        if (result.records.length > 0) {
+          console.log(`📊 [AgentPayments] Sample ReportRecords:`, result.records.slice(0, 5).map((r: ReportRecord) => ({
+            id: r.id,
+            userBillId: r.userBillId,
+            transactionCode: r.transactionCode,
+            agentCode: r.agentCode,
+            agentId: r.agentId,
+            merchantTransactionId: r.merchantTransactionId,
+            merchantAmount: r.merchantAmount,
+            hasMerchantsFileData: !!(r.merchantsFileData && Object.keys(r.merchantsFileData).length > 0),
+            reconciliationStatus: r.reconciliationStatus || r.status
+          })));
+        }
+        
+        setReportRecordsFromDB(result.records);
+      } catch (error) {
+        console.error('[AgentPayments] Error loading report records:', error);
+      }
+    };
+    
+    loadReportRecords();
+  }, [agentId, agentCode]);
   
   const [activeTab, setActiveTab] = useState<'unpaid' | 'batches'>('unpaid');
   
@@ -24,6 +73,17 @@ const AgentPayments: React.FC = () => {
   const [expandedUsers, setExpandedUsers] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
+  const [previewBillImage, setPreviewBillImage] = useState<string | null>(null);
+  
+  // Edit state
+  const [editingRecord, setEditingRecord] = useState<ReportRecord | null>(null);
+  const [editForm, setEditForm] = useState({
+    transactionCode: '',
+    transactionDate: '',
+    amount: '',
+    paymentMethod: '',
+    pointOfSaleName: ''
+  });
   
   // Filters for unpaid tab
   const [dateFrom, setDateFrom] = useState<string>('');
@@ -46,37 +106,172 @@ const AgentPayments: React.FC = () => {
   // Load matched user_bills that haven't been paid by agent
   useEffect(() => {
     const loadUnpaidBills = async () => {
-      if (!agentId) return;
+      if (!agentId || !agentCode) return;
       
       try {
-        // Load from user_bills directly (not ReportRecord)
-        // Điều kiện: agentId === currentAgent.id, isPaidByAgent !== true
-        // Không phụ thuộc vào admin reconciliation status - đây là luồng riêng giữa đại lý và khách hàng
+        // Auto-cleanup expired bill images (only for agent's bills)
         const allBills = FirebaseUtils.objectToArray(billsData || {});
-        const unpaidBills = allBills.filter((bill: UserBill) => {
-          return bill.agentId === agentId && 
-                 (bill.isPaidByAgent !== true || !bill.isPaidByAgent);
+        const agentBills = allBills.filter((bill: UserBill) => bill.agentId === agentId || bill.agentCode === agentCode);
+        console.log(`📊 Agent ${agentCode} (${agentId}): Found ${agentBills.length} bills out of ${allBills.length} total bills`);
+        
+        if (agentBills.length > 0) {
+          await cleanupExpiredBillImages(agentBills);
+        }
+        
+        // TRUY VẤN TRỰC TIẾP TỪ BẢNG BÁO CÁO: Dùng reportRecordsFromDB đã load từ getAllReportRecordsWithMerchants
+        // Tạo maps: userBillId -> ReportRecord và transactionCode -> ReportRecord
+        const reportsByBillId = new Map<string, ReportRecord>();
+        const reportsByTransactionCode = new Map<string, ReportRecord>();
+        
+        reportRecordsFromDB.forEach((report: ReportRecord) => {
+          // Map bằng userBillId (nếu có)
+          if (report.userBillId) {
+            reportsByBillId.set(report.userBillId, report);
+          }
+          // Map bằng transactionCode
+          if (report.transactionCode) {
+            const code = String(report.transactionCode).trim();
+            if (code) {
+              // Ưu tiên record có userBillId hoặc merchantTransactionId
+              const existing = reportsByTransactionCode.get(code);
+              if (!existing || report.userBillId || report.merchantTransactionId) {
+                reportsByTransactionCode.set(code, report);
+              }
+            }
+          }
         });
         
-        // Convert to ReportRecord-like structure for display
-        const reports: ReportRecord[] = unpaidBills.map((bill: UserBill) => ({
-          id: bill.id,
-          userBillId: bill.id,
-          userId: bill.userId,
-          agentId: bill.agentId,
-          agentCode: bill.agentCode,
-          transactionCode: bill.transactionCode,
-          amount: bill.amount,
-          paymentMethod: bill.paymentMethod,
-          pointOfSaleName: bill.pointOfSaleName,
-          transactionDate: bill.timestamp,
-          userBillCreatedAt: bill.createdAt,
-          status: bill.status as 'MATCHED',
-          reconciledAt: bill.createdAt,
-          reconciledBy: 'ADMIN',
-          createdAt: bill.createdAt
-        }));
+        console.log(`📊 [AgentPayments] Mapped ${reportsByBillId.size} by billId, ${reportsByTransactionCode.size} by transactionCode from getAllReportRecordsWithMerchants`);
         
+        // Debug: Log sample bills
+        if (agentBills.length > 0) {
+          console.log(`📊 [AgentPayments] Sample bills for agent ${agentCode}:`, agentBills.slice(0, 3).map((b: UserBill) => ({
+            id: b.id,
+            transactionCode: b.transactionCode,
+            agentCode: b.agentCode,
+            agentId: b.agentId,
+            amount: b.amount
+          })));
+        }
+        
+        // Get all payments to check if bills are already paid
+        const allPayments = FirebaseUtils.objectToArray(agentPaymentsData || {});
+        const paidBillIds = new Set<string>();
+        allPayments.forEach((payment: AgentPaymentToUser) => {
+          if (payment.agentId === agentId && payment.status === 'PAID' && payment.billIds) {
+            payment.billIds.forEach(billId => paidBillIds.add(billId));
+          }
+        });
+        console.log(`📊 Found ${paidBillIds.size} paid bills for agent ${agentCode}`);
+        
+        // Filter unpaid bills: bills that belong to this agent and haven't been paid
+        const unpaidBills = agentBills.filter((bill: UserBill) => {
+          // Check if bill is paid by agent
+          if (bill.isPaidByAgent === true) {
+            return false; // Already paid
+          }
+          
+          // Check if there's a PAID AgentPaymentToUser record for this bill
+          if (paidBillIds.has(bill.id)) {
+            return false; // Already paid via payment batch
+          }
+          
+          return true;
+        });
+        console.log(`📊 Found ${unpaidBills.length} unpaid bills for agent ${agentCode}`);
+        
+        // Create ReportRecord array: TRUY VẤN TRỰC TIẾP bằng transactionCode
+        const reports: ReportRecord[] = unpaidBills.map((bill: UserBill) => {
+          // TRUY VẤN TRỰC TIẾP: Tìm bằng transactionCode trước (vì đây là key chính để match)
+          let existingReport: ReportRecord | undefined;
+          
+          if (bill.transactionCode) {
+            const code = String(bill.transactionCode).trim();
+            if (code) {
+              // Tìm trực tiếp trong map
+              existingReport = reportsByTransactionCode.get(code);
+              
+              if (existingReport) {
+                console.log(`✅ [AgentPayments] Found ReportRecord ${existingReport.id} for bill ${bill.id} by transactionCode: ${code}`, {
+                  hasMerchantAmount: !!existingReport.merchantAmount,
+                  merchantAmount: existingReport.merchantAmount,
+                  hasMerchantsFileData: !!(existingReport.merchantsFileData && Object.keys(existingReport.merchantsFileData).length > 0),
+                  merchantTransactionId: existingReport.merchantTransactionId,
+                  reconciliationStatus: existingReport.reconciliationStatus || existingReport.status
+                });
+              } else {
+                // Nếu không tìm thấy bằng transactionCode, thử tìm bằng userBillId
+                existingReport = reportsByBillId.get(bill.id);
+                if (existingReport) {
+                  console.log(`✅ [AgentPayments] Found ReportRecord ${existingReport.id} for bill ${bill.id} by userBillId (transactionCode: ${code})`);
+                } else {
+                  console.log(`❌ [AgentPayments] No ReportRecord found for bill ${bill.id} with transactionCode: ${code}`);
+                  // Debug: Kiểm tra xem có ReportRecord nào có transactionCode tương tự không
+                  const similarCodes = Array.from(reportsByTransactionCode.keys()).filter(k => k.includes(code) || code.includes(k));
+                  if (similarCodes.length > 0) {
+                    console.log(`⚠️ [AgentPayments] Found similar transactionCodes:`, similarCodes);
+                  }
+                }
+              }
+            }
+          }
+          
+          // Nếu vẫn không tìm thấy, thử tìm bằng userBillId
+          if (!existingReport) {
+            existingReport = reportsByBillId.get(bill.id);
+            if (existingReport) {
+              console.log(`✅ [AgentPayments] Found ReportRecord ${existingReport.id} for bill ${bill.id} by userBillId`);
+            }
+          }
+          
+          // Nếu tìm thấy ReportRecord → return với merchant data
+          if (existingReport) {
+            // Đảm bảo userBillId được set đúng
+            if (!existingReport.userBillId || existingReport.userBillId !== bill.id) {
+              return {
+                ...existingReport,
+                id: bill.id,
+                userBillId: bill.id,
+                userId: bill.userId,
+                agentId: bill.agentId,
+                agentCode: bill.agentCode,
+                transactionCode: bill.transactionCode,
+                amount: bill.amount,
+                paymentMethod: bill.paymentMethod,
+                pointOfSaleName: bill.pointOfSaleName,
+                transactionDate: bill.timestamp,
+                userBillCreatedAt: bill.createdAt,
+                invoiceNumber: bill.invoiceNumber
+              };
+            }
+            return existingReport;
+          }
+          
+          // Không tìm thấy ReportRecord → tạo từ bill (chưa có merchant data)
+          return {
+            id: bill.id,
+            userBillId: bill.id,
+            userId: bill.userId,
+            agentId: bill.agentId,
+            agentCode: bill.agentCode,
+            transactionCode: bill.transactionCode,
+            amount: bill.amount,
+            paymentMethod: bill.paymentMethod,
+            pointOfSaleName: bill.pointOfSaleName,
+            transactionDate: bill.timestamp,
+            userBillCreatedAt: bill.createdAt,
+            status: (bill.status as ReportRecord['status']) || 'UNMATCHED',
+            reconciliationStatus: 'UNMATCHED',
+            reconciledAt: bill.createdAt,
+            reconciledBy: 'ADMIN',
+            createdAt: bill.createdAt,
+            merchantAmount: undefined,
+            merchantTransactionId: undefined,
+            merchantsFileData: undefined
+          };
+        });
+        
+        console.log(`📊 Setting ${reports.length} unpaid reports for agent ${agentCode}`);
         setUnpaidReports(reports);
       } catch (error) {
         console.error('Error loading unpaid bills:', error);
@@ -84,7 +279,7 @@ const AgentPayments: React.FC = () => {
     };
     
     loadUnpaidBills();
-  }, [agentId, billsData]);
+  }, [agentId, agentCode, billsData, reportRecordsFromDB, agentPaymentsData]);
 
   // Load AgentPaymentToUser batches (only PAID ones for "Đợt chi trả" tab)
   useEffect(() => {
@@ -200,11 +395,24 @@ const AgentPayments: React.FC = () => {
     return groups;
   }, [filteredUnpaidReports, users]);
 
-  // Calculate totals for each user group
+  // Calculate totals for each user group (bill amount and merchant amount)
   const userTotals = useMemo(() => {
-    const totals: Record<string, number> = {};
+    const totals: Record<string, { billAmount: number; merchantAmount: number }> = {};
     Object.entries(reportsByUser).forEach(([userId, group]) => {
-      totals[userId] = group.reports.reduce((sum, r) => sum + r.amount, 0);
+      let sumBillAmount = 0;
+      let sumMerchantAmount = 0;
+      
+      group.reports.forEach(report => {
+        // Bill amount (always from report.amount which is from bill)
+        sumBillAmount += report.amount || 0;
+        
+        // Merchant amount (from report.merchantAmount if available)
+        if (report.merchantAmount !== undefined && report.merchantAmount !== null) {
+          sumMerchantAmount += report.merchantAmount;
+        }
+      });
+      
+      totals[userId] = { billAmount: sumBillAmount, merchantAmount: sumMerchantAmount };
     });
     return totals;
   }, [reportsByUser]);
@@ -326,9 +534,80 @@ const AgentPayments: React.FC = () => {
     });
   };
 
+  // Edit handlers
+  const handleEdit = (report: ReportRecord) => {
+    setEditingRecord(report);
+    setEditForm({
+      transactionCode: report.transactionCode || '',
+      transactionDate: report.transactionDate ? new Date(report.transactionDate).toISOString().split('T')[0] : '',
+      amount: String(report.amount || 0),
+      paymentMethod: report.paymentMethod || '',
+      pointOfSaleName: report.pointOfSaleName || ''
+    });
+  };
+
+  const handleCancelEdit = () => {
+    setEditingRecord(null);
+    setEditForm({
+      transactionCode: '',
+      transactionDate: '',
+      amount: '',
+      paymentMethod: '',
+      pointOfSaleName: ''
+    });
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingRecord) return;
+
+    try {
+      const updates: Partial<ReportRecord> = {};
+      const editedFields: string[] = [];
+
+      if (editForm.transactionCode !== editingRecord.transactionCode) {
+        updates.transactionCode = editForm.transactionCode;
+        editedFields.push('transactionCode');
+      }
+      if (editForm.transactionDate) {
+        const newDate = new Date(editForm.transactionDate).toISOString();
+        if (newDate !== editingRecord.transactionDate) {
+          updates.transactionDate = newDate;
+          editedFields.push('transactionDate');
+        }
+      }
+      if (parseFloat(editForm.amount) !== editingRecord.amount) {
+        updates.amount = parseFloat(editForm.amount);
+        editedFields.push('amount');
+      }
+      if (editForm.paymentMethod !== editingRecord.paymentMethod) {
+        updates.paymentMethod = editForm.paymentMethod as any;
+        editedFields.push('paymentMethod');
+      }
+      if (editForm.pointOfSaleName !== (editingRecord.pointOfSaleName || '')) {
+        updates.pointOfSaleName = editForm.pointOfSaleName || undefined;
+        editedFields.push('pointOfSaleName');
+      }
+
+      if (editedFields.length > 0) {
+        updates.isManuallyEdited = true;
+        updates.editedFields = editedFields;
+        await ReportService.updateReportRecord(editingRecord.id, updates);
+        alert('Đã cập nhật thành công!');
+        handleCancelEdit();
+        // Reload data
+        window.location.reload();
+      } else {
+        handleCancelEdit();
+      }
+    } catch (error) {
+      console.error('Error updating record:', error);
+      alert('Có lỗi khi cập nhật bản ghi');
+    }
+  };
+
   const selectedTotal = filteredUnpaidReports
     .filter(r => selectedReports.includes(r.id))
-    .reduce((sum, r) => sum + r.amount, 0);
+    .reduce((sum, r) => sum + (r.amount || 0), 0);
 
   if (!agentId) {
     return null;
@@ -504,9 +783,17 @@ const AgentPayments: React.FC = () => {
                               <p className="text-sm text-slate-500">SĐT: {user?.phone || 'N/A'}</p>
                             </div>
                           </div>
-                          <div className="text-right mr-4">
-                            <p className="text-sm text-slate-500">Tổng tiền</p>
-                            <p className="text-lg font-bold text-slate-900">{formatAmount(total)}</p>
+                          <div className="text-right mr-4 space-y-1">
+                            <div>
+                              <p className="text-xs text-slate-500">Số tiền từ bill</p>
+                              <p className="text-lg font-bold text-slate-900">{formatAmount(total.billAmount)}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-slate-500">Tiền từ file merchants</p>
+                              <p className="text-sm font-medium text-indigo-600">
+                                {total.merchantAmount > 0 ? formatAmount(total.merchantAmount) : 'Chưa có file merchants'}
+                              </p>
+                            </div>
                           </div>
                           <button
                             onClick={() => {
@@ -550,13 +837,22 @@ const AgentPayments: React.FC = () => {
                                   </th>
                                   <th className="px-3 py-2 text-left">Mã GD</th>
                                   <th className="px-3 py-2 text-left">Ngày GD</th>
-                                  <th className="px-3 py-2 text-right">Số tiền</th>
+                                  <th className="px-3 py-2 text-right">Số tiền từ bill</th>
+                                  <th className="px-3 py-2 text-right">Tiền từ file merchants</th>
                                   <th className="px-3 py-2 text-left">Phương thức</th>
                                   <th className="px-3 py-2 text-left">Điểm thu</th>
+                                  <th className="px-3 py-2 text-center">Thao tác</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-slate-100">
-                                {group.reports.map((report) => (
+                                {group.reports.map((report) => {
+                                  // Get bill image URL with expiration check
+                                  const allBills = FirebaseUtils.objectToArray(billsData || {});
+                                  const bill = allBills.find((b: UserBill) => b.id === report.userBillId);
+                                  const billImageUrl = bill ? getBillImageUrl(bill) : null;
+                                  const imageExpired = bill ? isBillImageExpired(bill) : false;
+                                  
+                                  return (
                                   <tr key={report.id} className="hover:bg-slate-50">
                                     <td className="px-3 py-2">
                                       <input
@@ -575,10 +871,40 @@ const AgentPayments: React.FC = () => {
                                     <td className="px-3 py-2 font-mono text-xs">{report.transactionCode}</td>
                                     <td className="px-3 py-2">{formatDateOnly(report.transactionDate)}</td>
                                     <td className="px-3 py-2 text-right font-medium">{formatAmount(report.amount)}</td>
+                                      <td className="px-3 py-2 text-right">
+                                        {report.merchantAmount !== undefined && report.merchantAmount !== null && report.merchantAmount > 0
+                                          ? formatAmount(report.merchantAmount)
+                                          : '-'}
+                                      </td>
                                     <td className="px-3 py-2">{report.paymentMethod}</td>
                                     <td className="px-3 py-2 font-mono text-xs">{report.pointOfSaleName || '-'}</td>
+                                      <td className="px-3 py-2 text-center">
+                                        <div className="flex items-center justify-center gap-2">
+                                          {billImageUrl ? (
+                                            <button
+                                              onClick={() => setPreviewBillImage(billImageUrl)}
+                                              className="px-2 py-1 text-xs font-medium text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded transition-colors"
+                                              title="Hiện ảnh bill"
+                                            >
+                                              Hiện ảnh
+                                            </button>
+                                          ) : imageExpired ? (
+                                            <span className="px-2 py-1 text-xs font-medium text-slate-500 italic" title="Quá hạn 1 tuần, hệ thống đã xoá">
+                                              Quá hạn 1 tuần, hệ thống đã xoá
+                                            </span>
+                                          ) : null}
+                                          <button
+                                            onClick={() => handleEdit(report)}
+                                            className="px-2 py-1 text-xs font-medium text-green-600 hover:text-green-800 hover:bg-green-50 rounded transition-colors"
+                                            title="Sửa thông tin"
+                                          >
+                                            Sửa
+                                          </button>
+                                        </div>
+                                      </td>
                                   </tr>
-                                ))}
+                                  );
+                                })}
                               </tbody>
                             </table>
                           </div>
@@ -849,6 +1175,176 @@ const AgentPayments: React.FC = () => {
                     {isProcessing ? 'Đang xử lý...' : 'Xác nhận đã thanh toán'}
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bill Image Preview Modal */}
+      {previewBillImage && (
+        <div className="fixed inset-0 z-50 overflow-y-auto">
+          <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+            <div 
+              className="fixed inset-0 transition-opacity bg-slate-900 bg-opacity-75" 
+              onClick={() => setPreviewBillImage(null)}
+            ></div>
+
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-4xl sm:w-full">
+              <div className="bg-white px-4 pt-5 pb-4 sm:p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-medium text-slate-900">
+                    Ảnh bill
+                  </h3>
+                  <button
+                    onClick={() => setPreviewBillImage(null)}
+                    className="text-slate-400 hover:text-slate-500"
+                  >
+                    <X className="w-6 h-6" />
+                  </button>
+                </div>
+
+                <div className="flex justify-center">
+                  <img 
+                    src={previewBillImage} 
+                    alt="Bill image" 
+                    className="max-w-full h-auto rounded-lg border border-slate-200"
+                    style={{ maxHeight: '80vh' }}
+                  />
+                </div>
+              </div>
+
+              <div className="bg-slate-50 px-4 py-3 sm:px-6">
+                <button
+                  onClick={() => setPreviewBillImage(null)}
+                  className="w-full px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50"
+                >
+                  Đóng
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Record Modal */}
+      {editingRecord && (
+        <div className="fixed inset-0 z-50 overflow-y-auto">
+          <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+            <div 
+              className="fixed inset-0 transition-opacity bg-slate-500 bg-opacity-75" 
+              onClick={handleCancelEdit}
+            ></div>
+
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+              <div className="bg-white px-4 pt-5 pb-4 sm:p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-medium text-slate-900">
+                    Sửa thông tin giao dịch
+                  </h3>
+                  <button
+                    onClick={handleCancelEdit}
+                    className="text-slate-400 hover:text-slate-500"
+                  >
+                    <X className="w-6 h-6" />
+                  </button>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Mã GD <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={editForm.transactionCode}
+                      onChange={(e) => setEditForm({ ...editForm, transactionCode: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                      placeholder="Nhập mã giao dịch"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Ngày GD <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="date"
+                      value={editForm.transactionDate}
+                      onChange={(e) => setEditForm({ ...editForm, transactionDate: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Số tiền từ bill <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={editForm.amount}
+                      onChange={(e) => setEditForm({ ...editForm, amount: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                      placeholder="Nhập số tiền"
+                      min="0"
+                      step="1000"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Phương thức <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={editForm.paymentMethod}
+                      onChange={(e) => setEditForm({ ...editForm, paymentMethod: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                    >
+                      <option value="">Chọn phương thức</option>
+                      <option value="QR 1 (VNPay)">QR 1 (VNPay)</option>
+                      <option value="QR 2 (Momo)">QR 2 (Momo)</option>
+                      <option value="QR 3 (ZaloPay)">QR 3 (ZaloPay)</option>
+                      <option value="QR 4 (ShopeePay)">QR 4 (ShopeePay)</option>
+                      <option value="QR 5 (ViettelPay)">QR 5 (ViettelPay)</option>
+                      <option value="QR 6 (Bank Transfer)">QR 6 (Bank Transfer)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Điểm thu
+                    </label>
+                    <input
+                      type="text"
+                      value={editForm.pointOfSaleName}
+                      onChange={(e) => setEditForm({ ...editForm, pointOfSaleName: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                      placeholder="Nhập điểm thu"
+                    />
+                  </div>
+
+                  <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                    <p className="text-xs text-yellow-800">
+                      <strong>Lưu ý:</strong> Cột "Tiền từ file merchants" không thể chỉnh sửa vì đây là dữ liệu từ file merchants đã upload.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-slate-50 px-4 py-3 sm:px-6 flex justify-end space-x-3">
+                <button
+                  onClick={handleCancelEdit}
+                  className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50"
+                >
+                  Hủy
+                </button>
+                <button
+                  onClick={handleSaveEdit}
+                  className="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700"
+                >
+                  <Save className="w-4 h-4 mr-2" />
+                  Lưu
+                </button>
               </div>
             </div>
           </div>

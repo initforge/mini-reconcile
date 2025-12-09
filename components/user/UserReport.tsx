@@ -83,12 +83,22 @@ const UserReport: React.FC = () => {
         dateTo: undefined
       };
       
-      const result = await ReportService.getReportRecords(filters, {
+      // Load TẤT CẢ records (bao gồm cả MATCHED, ERROR, UNMATCHED)
+      // Dùng getAllReportRecordsWithMerchants để hiển thị tất cả merchant data như AdminReport
+      const result = await ReportService.getAllReportRecordsWithMerchants(filters, {
         limit: 10000 // Load all for client-side filtering
       });
       
+      // KHÔNG filter UNMATCHED - hiển thị TẤT CẢ records (MATCHED, ERROR, UNMATCHED)
+      // Chỉ filter các records không hợp lệ (không có transactionCode hoặc amount)
+      let filteredRecords = result.records.filter(r => {
+        // Loại bỏ records không có transactionCode hoặc amount hợp lệ
+        if (!r.transactionCode || r.transactionCode.trim() === '') return false;
+        if (!r.amount || isNaN(r.amount) || !isFinite(r.amount) || r.amount <= 0) return false;
+        return true;
+      });
+      
       // Apply date filter client-side (simple logic like "Đợt chi trả" tab)
-      let filteredRecords = result.records;
       if (dateFrom || dateTo) {
         filteredRecords = filteredRecords.filter(r => {
           const dateToCheck = r.transactionDate || r.userBillCreatedAt || r.reconciledAt || r.createdAt;

@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { CreditCard, CheckCircle, Clock } from 'lucide-react';
+import { CheckCircle, Clock } from 'lucide-react';
 import { useRealtimeData, FirebaseUtils } from '../../src/lib/firebaseHooks';
 import type { UserBill, Agent, AgentPaymentToUser } from '../../types';
 import Pagination from '../Pagination';
@@ -20,10 +20,38 @@ const PaymentStatus: React.FC = () => {
   const [paidBillsPage, setPaidBillsPage] = useState(1);
   const paidBillsItemsPerPage = 5;
 
-  // Get user's bills grouped by agent
+  // Get user's bills
   const userBills = allBills.filter(bill => bill.userId === userId);
-  const paidBills = userBills.filter(bill => bill.isPaidByAgent);
-  const unpaidBills = userBills.filter(bill => !bill.isPaidByAgent && bill.status === 'MATCHED');
+  
+  // Build a Set of billIds from payments where payment.status === 'PAID'
+  const paidFromPayments = useMemo(() => {
+    const paidBillIds = new Set<string>();
+    allPayments.forEach(payment => {
+      if (payment.status === 'PAID' && payment.billIds && Array.isArray(payment.billIds)) {
+        payment.billIds.forEach(billId => paidBillIds.add(billId));
+      }
+    });
+    return paidBillIds;
+  }, [allPayments]);
+  
+  // Helper function to determine if a bill is paid from user's perspective
+  const isPaidByUserView = (bill: UserBill): boolean => {
+    // Check if bill.isPaidByAgent is true (legacy or direct flag)
+    if (bill.isPaidByAgent === true) {
+      return true;
+    }
+    
+    // Check if bill is in any paid payment record
+    if (paidFromPayments.has(bill.id)) {
+      return true;
+    }
+    
+    return false;
+  };
+  
+  // Separate bills into paid and pending
+  const paidBills = userBills.filter(isPaidByUserView);
+  const unpaidBills = userBills.filter(bill => !isPaidByUserView(bill) && bill.status === 'MATCHED');
 
   // Group by agent
   const billsByAgent = useMemo(() => {
@@ -77,19 +105,7 @@ const PaymentStatus: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white rounded-xl border border-slate-200 p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-slate-500">Tổng số bill</p>
-              <p className="text-2xl font-bold text-slate-900 mt-1">{userBills.length}</p>
-            </div>
-            <div className="w-12 h-12 bg-indigo-100 rounded-lg flex items-center justify-center">
-              <CreditCard className="w-6 h-6 text-indigo-600" />
-            </div>
-          </div>
-        </div>
-
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="bg-white rounded-xl border border-slate-200 p-6">
           <div className="flex items-center justify-between">
             <div>
@@ -127,7 +143,12 @@ const PaymentStatus: React.FC = () => {
           <>
             {paginatedAgentEntries.map(([agentId, bills]) => {
             const totalAmount = bills.reduce((sum, bill) => sum + bill.amount, 0);
-            const payment = allPayments.find(p => p.userId === userId && p.agentId === agentId);
+            // Find payment that includes any of these bills
+            const payment = allPayments.find(p => 
+              (p.userId === userId || bills.some(b => p.billIds?.includes(b.id))) && 
+              p.agentId === agentId &&
+              p.status === 'PAID'
+            );
             
             return (
               <div key={agentId} className="bg-white rounded-xl border border-slate-200 p-6">

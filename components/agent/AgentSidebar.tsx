@@ -28,7 +28,7 @@ const AgentSidebar: React.FC<AgentSidebarProps> = ({ activeTab, onLogout }) => {
   ];
 
   return (
-    <div className="w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white min-h-screen flex flex-col shadow-2xl fixed left-0 top-0 z-[100] border-r border-slate-700">
+    <div className="hidden md:flex w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white min-h-screen flex-col shadow-2xl fixed left-0 top-0 z-[100] border-r border-slate-700">
       <div className="p-6 border-b border-slate-700/50">
         <div className="flex items-center space-x-3 mb-2">
           <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center">

@@ -15,7 +15,8 @@ import type {
   ExportData,
   TransactionStatus,
   MerchantTransaction,
-  ReportRecord
+  ReportRecord,
+  AdminPaymentToAgent
 } from '../../types'
 import { TransactionStatus as TS } from '../../types'
 
@@ -345,27 +346,6 @@ export const ReconciliationService = {
     await update(ref(database), updates)
   },
 
-  // Lấy lịch sử các phiên đối soát (lấy COMPLETED và PROCESSING, bỏ FAILED)
-  // Lazy loading: chỉ load số lượng cần thiết
-  async getSessionHistory(page: number = 1, pageSize: number = 5): Promise<{ sessions: ReconciliationSession[]; hasMore: boolean; total: number }> {
-    const snapshot = await get(ref(database, 'reconciliation_sessions'))
-    const sessions = FirebaseUtils.objectToArray(snapshot.val()) as ReconciliationSession[]
-    // Lấy COMPLETED và PROCESSING, bỏ FAILED
-    const validSessions = sessions.filter(s => s.status === 'COMPLETED' || s.status === 'PROCESSING')
-    const sorted = validSessions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    
-    const total = sorted.length
-    const startIndex = (page - 1) * pageSize
-    const endIndex = startIndex + pageSize
-    const paginatedSessions = sorted.slice(startIndex, endIndex)
-    const hasMore = endIndex < total
-    
-    return {
-      sessions: paginatedSessions,
-      hasMore,
-      total
-    }
-  },
 
   // Lấy records theo session ID
   async getRecordsBySession(sessionId: string): Promise<ReconciliationRecord[]> {
@@ -513,13 +493,6 @@ export const SettingsService = {
     }
   },
 
-  // Cập nhật GEMINI API Key
-  async updateGeminiApiKey(apiKey: string): Promise<void> {
-    await update(ref(database, 'settings'), {
-      geminiApiKey: apiKey,
-      updatedAt: FirebaseUtils.getServerTimestamp()
-    })
-  },
 
   // Cập nhật logo công ty
   async updateLogo(logoUrl: string): Promise<void> {
@@ -768,6 +741,76 @@ export const PaymentsService = {
     }
   },
 
+  // Revert payment batch - chuyển batch về DRAFT và xóa các AdminPaymentToAgent để tránh duplicate
+  async revertPaymentBatch(batchId: string): Promise<void> {
+    // Load batch
+    const batchSnapshot = await get(ref(database, `payment_batches/${batchId}`))
+    const batch = batchSnapshot.val() as PaymentBatch
+    
+    if (!batch) {
+      throw new Error('Batch not found')
+    }
+
+    const updates: any = {}
+    
+    // Update batch status to DRAFT
+    updates[`payment_batches/${batchId}/paymentStatus`] = 'DRAFT'
+    updates[`payment_batches/${batchId}/paidAt`] = null
+    
+    // Load all AdminPaymentToAgent records in this batch
+    const paymentIds = batch.paymentIds || batch.adminPaymentIds || []
+    if (paymentIds.length > 0) {
+      const allPaymentsSnapshot = await get(ref(database, 'admin_payments_to_agents'))
+      const allPayments = FirebaseUtils.objectToArray(allPaymentsSnapshot.val() || {}) as AdminPaymentToAgent[]
+      
+      const batchPayments = allPayments.filter(p => paymentIds.includes(p.id))
+      
+      // Collect all report record IDs from all payments
+      const allReportRecordIds = new Set<string>()
+      batchPayments.forEach(payment => {
+        // XÓA AdminPaymentToAgent thay vì chỉ update status (giống logic bên đại lý)
+        // Điều này tránh duplicate khi revert
+        updates[`admin_payments_to_agents/${payment.id}`] = null
+        
+        // Collect report record IDs
+        if (payment.reportRecordIds && payment.reportRecordIds.length > 0) {
+          payment.reportRecordIds.forEach(recordId => allReportRecordIds.add(recordId))
+        }
+        // Also collect from billIds
+        if (payment.billIds && payment.billIds.length > 0) {
+          // Find report records by userBillId
+          // We'll handle this below
+        }
+      })
+      
+      // Also find ReportRecords by adminPaymentId (in case reportRecordIds not set)
+      const allReportsSnapshot = await get(ref(database, 'report_records'))
+      const allReports = FirebaseUtils.objectToArray(allReportsSnapshot.val() || {}) as ReportRecord[]
+      
+      allReports.forEach(report => {
+        if (paymentIds.includes(report.adminPaymentId || '')) {
+          allReportRecordIds.add(report.id)
+        }
+        // Also check by billIds
+        batchPayments.forEach(payment => {
+          if (payment.billIds && payment.billIds.includes(report.userBillId || '')) {
+            allReportRecordIds.add(report.id)
+          }
+        })
+      })
+      
+      // Clear admin payment fields from all ReportRecords
+      allReportRecordIds.forEach(recordId => {
+        updates[`report_records/${recordId}/adminPaymentId`] = null
+        updates[`report_records/${recordId}/adminBatchId`] = null
+        updates[`report_records/${recordId}/adminPaidAt`] = null
+        updates[`report_records/${recordId}/adminPaymentStatus`] = 'UNPAID'
+      })
+    }
+    
+    await update(ref(database), updates)
+  },
+
   // Xóa đợt chi trả
   async deleteBatch(batchId: string): Promise<void> {
     // Lấy batch để lấy paymentIds
@@ -783,20 +826,60 @@ export const PaymentsService = {
     // Xóa batch
     updates[`payment_batches/${batchId}`] = null
     
-    // Xóa các payments trong batch
-    if (batch.paymentIds && batch.paymentIds.length > 0) {
-      batch.paymentIds.forEach((paymentId: string) => {
-        updates[`payments/${paymentId}`] = null
-      })
+    // Load all AdminPaymentToAgent records in this batch
+    const paymentIds = batch.paymentIds || batch.adminPaymentIds || []
+    if (paymentIds.length > 0) {
+      const allPaymentsSnapshot = await get(ref(database, 'admin_payments_to_agents'))
+      const allPayments = FirebaseUtils.objectToArray(allPaymentsSnapshot.val() || {}) as AdminPaymentToAgent[]
+      
+      const batchPayments = allPayments.filter(p => paymentIds.includes(p.id))
+      
+      // Collect all report record IDs from all payments
+      const allReportRecordIds = new Set<string>()
+      batchPayments.forEach(payment => {
+        // Optionally remove AdminPaymentToAgent (or just clear batchId)
+        // For now, we'll just clear the batchId link
+        updates[`admin_payments_to_agents/${payment.id}/batchId`] = null
+        
+        // Collect report record IDs
+        if (payment.reportRecordIds && payment.reportRecordIds.length > 0) {
+          payment.reportRecordIds.forEach(recordId => allReportRecordIds.add(recordId))
     }
-    
-    // Xóa paymentId khỏi các reconciliation records để chúng lại xuất hiện trong "Chưa thanh toán"
-    if (batch.paymentIds && batch.paymentIds.length > 0) {
+      })
+      
+      // Also find ReportRecords by adminPaymentId (in case reportRecordIds not set)
+      const allReportsSnapshot = await get(ref(database, 'report_records'))
+      const allReports = FirebaseUtils.objectToArray(allReportsSnapshot.val() || {}) as ReportRecord[]
+      
+      allReports.forEach(report => {
+        if (paymentIds.includes(report.adminPaymentId || '')) {
+          allReportRecordIds.add(report.id)
+        }
+      })
+      
+      // Clear admin payment fields from all ReportRecords
+      allReportRecordIds.forEach(recordId => {
+        updates[`report_records/${recordId}/adminPaymentId`] = null
+        updates[`report_records/${recordId}/adminBatchId`] = null
+        updates[`report_records/${recordId}/adminPaidAt`] = null
+        updates[`report_records/${recordId}/adminPaymentStatus`] = 'UNPAID'
+      })
+      
+      // Legacy: Also handle old Payment system if exists
+      const oldPaymentsSnapshot = await get(ref(database, 'payments'))
+      const oldPayments = FirebaseUtils.objectToArray(oldPaymentsSnapshot.val() || {}) as Payment[]
+      const oldBatchPayments = oldPayments.filter(p => p.batchId === batchId)
+      
+      oldBatchPayments.forEach(payment => {
+        updates[`payments/${payment.id}`] = null
+      })
+      
+      // Legacy: Clear reconciliation_records
       const recordsSnapshot = await get(ref(database, 'reconciliation_records'))
-      const allRecords = FirebaseUtils.objectToArray(recordsSnapshot.val()) as ReconciliationRecord[]
+      const allRecords = FirebaseUtils.objectToArray(recordsSnapshot.val() || {}) as ReconciliationRecord[]
       
       const recordsToUpdate = allRecords.filter(r => 
-        r.paymentId && batch.paymentIds.includes(r.paymentId)
+        r.paymentId && oldBatchPayments.some(p => p.id === r.paymentId)
       )
       
       recordsToUpdate.forEach(record => {
@@ -1034,17 +1117,103 @@ export const MerchantTransactionsService = {
   },
 
   /**
-   * Tạo nhiều merchant transactions cùng lúc (batch)
+   * Lấy merchant transaction theo transaction code (sử dụng byCode mapping)
+   * Normalize transactionCode để đảm bảo match chính xác
    */
-  async createBatch(transactions: Array<Omit<MerchantTransaction, 'id' | 'createdAt'>>): Promise<string[]> {
+  async getByTransactionCode(transactionCode: string): Promise<MerchantTransaction | null> {
+    try {
+      // Normalize transactionCode (trim whitespace)
+      const normalizeCode = (code: string | undefined | null): string | null => {
+        if (!code) return null;
+        return String(code).trim();
+      };
+      
+      const normalizedCode = normalizeCode(transactionCode);
+      if (!normalizedCode) return null;
+      
+      // Check byCode mapping first (try both original and normalized)
+      let byCodeSnapshot = await get(ref(database, `merchant_transactions/byCode/${transactionCode}`));
+      let existingId = byCodeSnapshot.val();
+      
+      // If not found with original, try normalized version
+      if (!existingId && normalizedCode !== transactionCode) {
+        byCodeSnapshot = await get(ref(database, `merchant_transactions/byCode/${normalizedCode}`));
+        existingId = byCodeSnapshot.val();
+      }
+      
+      if (existingId) {
+        // Found in mapping, get the full transaction
+        return await this.getById(existingId);
+      }
+      
+      // Fallback: search all transactions (for backward compatibility)
+      // Normalize comparison để đảm bảo match chính xác
+      const snapshot = await get(ref(database, 'merchant_transactions'));
+      const allTransactions = FirebaseUtils.objectToArray<MerchantTransaction>(snapshot.val() || {});
+      const found = allTransactions.find(t => {
+        const tCode = normalizeCode(t.transactionCode);
+        return tCode === normalizedCode || t.transactionCode === transactionCode;
+      });
+      
+      // If found, update byCode mapping for future lookups (use normalized version)
+      if (found) {
+        await update(ref(database, `merchant_transactions/byCode/${normalizedCode}`), found.id);
+      }
+      
+      return found || null;
+    } catch (error) {
+      console.error('Error getting merchant transaction by code:', error);
+      return null;
+    }
+  },
+
+  /**
+   * Tạo nhiều merchant transactions cùng lúc (batch) với duplicate checking
+   */
+  async createBatch(transactions: Array<Omit<MerchantTransaction, 'id' | 'createdAt'>>): Promise<{ created: string[]; skipped: Array<{ transactionCode: string; reason: string }> }> {
     const timestamp = FirebaseUtils.getServerTimestamp();
-    const promises = transactions.map(async (transaction) => {
+    const created: string[] = [];
+    const skipped: Array<{ transactionCode: string; reason: string }> = [];
+    const updates: any = {};
+    
+    // Load existing byCode mapping
+    const byCodeSnapshot = await get(ref(database, 'merchant_transactions/byCode'));
+    const existingCodes = byCodeSnapshot.val() || {};
+    
+    for (const transaction of transactions) {
+      const transactionCode = transaction.transactionCode;
+      
+      // Check if transaction code already exists
+      if (existingCodes[transactionCode]) {
+        console.warn(`⚠️ Mã chuẩn chi "${transactionCode}" đã tồn tại, bỏ qua`);
+        skipped.push({
+          transactionCode,
+          reason: 'Mã chuẩn chi đã tồn tại trong hệ thống'
+        });
+        continue;
+      }
+      
       // Remove undefined values - Firebase doesn't allow undefined
+      // Also sanitize rawData keys to remove Firebase-invalid characters: '.', '#', '$', '/', '[', ']'
+      const sanitizeKey = (key: string): string => {
+        return key.replace(/[.#$/\[\]]/g, '_');
+      };
+      
       const cleanTransaction: any = {};
       Object.keys(transaction).forEach(key => {
         const value = (transaction as any)[key];
         if (value !== undefined) {
+          if (key === 'rawData' && value && typeof value === 'object') {
+            // Sanitize rawData keys
+            const sanitizedRawData: Record<string, any> = {};
+            Object.keys(value).forEach(rawKey => {
+              const sanitizedRawKey = sanitizeKey(rawKey);
+              sanitizedRawData[sanitizedRawKey] = value[rawKey];
+            });
+            cleanTransaction[key] = sanitizedRawData;
+          } else {
           cleanTransaction[key] = value;
+          }
         }
       });
       
@@ -1052,10 +1221,29 @@ export const MerchantTransactionsService = {
         ...cleanTransaction,
         createdAt: timestamp
       };
+      
+      // Create transaction
       const newRef = await push(ref(database, 'merchant_transactions'), newTransaction);
-      return newRef.key!;
-    });
-    return await Promise.all(promises);
+      const newId = newRef.key!;
+      created.push(newId);
+      
+      // Update byCode mapping
+      updates[`merchant_transactions/byCode/${transactionCode}`] = newId;
+      
+      // Track in local map for this batch
+      existingCodes[transactionCode] = newId;
+    }
+    
+    // Apply all updates (byCode mappings) in one batch
+    if (Object.keys(updates).length > 0) {
+      await update(ref(database), updates);
+    }
+    
+    if (skipped.length > 0) {
+      console.warn(`⚠️ Đã bỏ qua ${skipped.length} giao dịch do mã chuẩn chi trùng lặp`);
+    }
+    
+    return { created, skipped };
   },
 
   /**

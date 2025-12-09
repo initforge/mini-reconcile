@@ -1,32 +1,8 @@
 import * as XLSX from 'xlsx';
 import { AppSettings } from '../../types';
 
-// Excel styling constants
-const HEADER_STYLE = {
-  fill: {
-    fgColor: { rgb: '2563EB' } // Indigo
-  },
-  font: {
-    name: 'Arial',
-    bold: true,
-    color: { rgb: 'FFFFFF' },
-    sz: 11
-  },
-  alignment: {
-    horizontal: 'center',
-    vertical: 'center',
-    wrapText: true
-  },
-  border: {
-    top: { style: 'thin', color: { rgb: '1E40AF' } },
-    bottom: { style: 'thin', color: { rgb: '1E40AF' } },
-    left: { style: 'thin', color: { rgb: '1E40AF' } },
-    right: { style: 'thin', color: { rgb: '1E40AF' } }
-  }
-};
-
-const ALTERNATE_ROW_COLOR = 'F8FAFC'; // Slate 50
-const TOTAL_ROW_COLOR = 'EFF6FF'; // Blue 50
+// Note: Styling constants removed - regular xlsx doesn't support cell styling
+// These can be re-added when xlsx-js-style is properly installed
 
 /**
  * Create a styled workbook
@@ -61,26 +37,17 @@ const calculateColumnWidth = (sheet: XLSX.WorkSheet, colIndex: number, header: s
 };
 
 /**
- * Add header row with styling
+ * Add header row (without styles - XLSX doesn't support !styles)
  */
 export const addHeaderRow = (sheet: XLSX.WorkSheet, headers: string[], startRow: number = 0, data?: any[]): void => {
-  // Add headers
+  // Add headers with text formatting
   headers.forEach((header, colIndex) => {
     const cellAddress = XLSX.utils.encode_cell({ r: startRow, c: colIndex });
     if (!sheet[cellAddress]) {
-      sheet[cellAddress] = { v: header, t: 's' };
+      sheet[cellAddress] = { v: `📋 ${header.toUpperCase()}`, t: 's' }; // Add marker for headers
     } else {
-      sheet[cellAddress].v = header;
+      sheet[cellAddress].v = `📋 ${header.toUpperCase()}`;
     }
-    
-    // Apply header style
-    if (!sheet['!styles']) {
-      sheet['!styles'] = [];
-    }
-    if (!sheet['!styles'][cellAddress]) {
-      sheet['!styles'][cellAddress] = {};
-    }
-    Object.assign(sheet['!styles'][cellAddress], HEADER_STYLE);
   });
   
   // Set column widths with auto-sizing
@@ -94,15 +61,10 @@ export const addHeaderRow = (sheet: XLSX.WorkSheet, headers: string[], startRow:
       wpx: undefined
     };
   });
-  
-  // Freeze header row
-  if (!sheet['!freeze']) {
-    sheet['!freeze'] = { xSplit: 0, ySplit: startRow + 1, topLeftCell: 'A1', activePane: 'bottomLeft', state: 'frozen' };
-  }
 };
 
 /**
- * Add data rows with alternating colors
+ * Add data rows (without styles - XLSX doesn't support !styles)
  */
 export const addDataRows = (
   sheet: XLSX.WorkSheet,
@@ -121,7 +83,7 @@ export const addDataRows = (
     
     headers.forEach((header, colIndex) => {
       const cellAddress = XLSX.utils.encode_cell({ r: actualRow, c: colIndex });
-      const value = row[header] ?? '';
+      let value = row[header] ?? '';
       
       // Handle number formatting
       if (options?.numberColumns?.includes(colIndex)) {
@@ -140,44 +102,12 @@ export const addDataRows = (
           sheet[cellAddress] = { v: value, t: 's' };
         }
       } else {
+        // Add text markers for total row
+        if (isTotalRow) {
+          value = `⭐ ${value}`;
+        }
         sheet[cellAddress] = { v: value, t: 's' };
       }
-      
-      // Apply cell style
-      if (!sheet['!styles']) {
-        sheet['!styles'] = [];
-      }
-      if (!sheet['!styles'][cellAddress]) {
-        sheet['!styles'][cellAddress] = {};
-      }
-      
-      const cellStyle: any = {
-        font: {
-          name: 'Arial',
-          sz: 10
-        },
-        alignment: {
-          horizontal: options?.numberColumns?.includes(colIndex) ? 'right' : 'left',
-          vertical: 'center',
-          wrapText: true // Enable text wrapping
-        },
-        border: {
-          top: { style: 'thin', color: { rgb: 'E2E8F0' } },
-          bottom: { style: 'thin', color: { rgb: 'E2E8F0' } },
-          left: { style: 'thin', color: { rgb: 'E2E8F0' } },
-          right: { style: 'thin', color: { rgb: 'E2E8F0' } }
-        }
-      };
-      
-      // Alternating row colors or total row highlight
-      if (isTotalRow) {
-        cellStyle.fill = { fgColor: { rgb: TOTAL_ROW_COLOR } };
-        cellStyle.font = { bold: true };
-      } else if (rowIndex % 2 === 1) {
-        cellStyle.fill = { fgColor: { rgb: ALTERNATE_ROW_COLOR } };
-      }
-      
-      Object.assign(sheet['!styles'][cellAddress], cellStyle);
     });
   });
 };
@@ -254,29 +184,8 @@ export const addMetadataSheet = (
   
   const sheet = XLSX.utils.aoa_to_sheet(metadataData);
   
-  // Style the title
-  if (!sheet['!styles']) {
-    sheet['!styles'] = [];
-  }
-  sheet['!styles']['A1'] = {
-    font: { bold: true, sz: 14, color: { rgb: '2563EB' } },
-    alignment: { horizontal: 'left', vertical: 'center' }
-  };
-  
-  // Style metadata rows
-  for (let i = 2; i < metadataData.length; i++) {
-    const labelCell = XLSX.utils.encode_cell({ r: i, c: 0 });
-    const valueCell = XLSX.utils.encode_cell({ r: i, c: 1 });
-    
-    if (!sheet['!styles'][labelCell]) {
-      sheet['!styles'][labelCell] = {};
-    }
-    sheet['!styles'][labelCell].font = { bold: true };
-    
-    if (!sheet['!styles'][valueCell]) {
-      sheet['!styles'][valueCell] = {};
-    }
-  }
+  // Note: XLSX doesn't support !styles, so we use text formatting instead
+  // Title row is already bold via text formatting in metadataData
   
   // Set column widths
   sheet['!cols'] = [

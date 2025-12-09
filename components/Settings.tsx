@@ -97,19 +97,6 @@ const Settings: React.FC = () => {
         console.warn('Could not save to localStorage:', e);
       }
       
-      // Clear API key cache if geminiApiKey was updated
-      if (settings.geminiApiKey) {
-        // Dynamically import and clear cache
-        import('../services/geminiService').then((module) => {
-          if (module.clearApiKeyCache) {
-            module.clearApiKeyCache();
-            console.log('✅ API key cache đã được làm mới');
-          }
-        }).catch(() => {
-          // Ignore if module doesn't export clearApiKeyCache
-        });
-      }
-      
       // Clear settings cache để áp dụng settings mới
       import('../src/utils/formatUtils').then((module) => {
         if (module.clearSettingsCache) {
@@ -429,96 +416,12 @@ const Settings: React.FC = () => {
               <span>API & Tích hợp</span>
             </h3>
             
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">
-                Google Gemini API Key
-              </label>
-              <div className="relative">
-                <input
-                  type="password"
-                  value={settings.geminiApiKey || ''}
-                  onChange={(e) => {
-                    updateSettings({ geminiApiKey: e.target.value });
-                    // Clear cache when API key is updated
-                    if (typeof window !== 'undefined') {
-                      (window as any).__geminiApiKeyCache = null;
-                    }
-                  }}
-                  placeholder="Nhập API key từ Google AI Studio (VD: AIzaSy...)"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 pr-10 font-mono text-sm"
-                />
-                <Key className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
-              </div>
-              <p className="text-xs text-slate-500 mt-1">
-                API key để sử dụng tính năng <strong>OCR đọc ảnh VNPay</strong> và <strong>Gemini Insights</strong> trong đối soát. 
-                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline ml-1">
-                  Lấy API key tại đây
-                </a>
-              </p>
-              {settings.geminiApiKey && (
-                <div className="mt-2 flex items-center space-x-2 text-xs text-emerald-600">
-                  <CheckCircle className="w-4 h-4" />
-                  <span>API key đã được cấu hình ({settings.geminiApiKey.substring(0, 10)}...)</span>
-                </div>
-              )}
-              
-              {/* Test API Key Button */}
-              {settings.geminiApiKey && (
-                <button
-                  onClick={async () => {
-                    try {
-                      setSaving(true);
-                      showMessage('success', 'Đang kiểm tra API key...');
-                      
-                      // Test API key bằng cách gọi Gemini API
-                      const { GoogleGenAI } = await import('@google/genai');
-                      const ai = new GoogleGenAI({ apiKey: settings.geminiApiKey! });
-                      
-                      // Test với một prompt đơn giản (sử dụng cách tương tự như geminiService.ts)
-                      const response = await ai.models.generateContent({
-                        model: 'gemini-2.5-flash',
-                        contents: 'Test',
-                      });
-                      
-                      // Verify response
-                      if (!response || !response.text) {
-                        throw new Error('API response is invalid');
-                      }
-                      
-                      showMessage('success', '✅ API key hoạt động bình thường!');
-                    } catch (error: any) {
-                      console.error('API test error:', error);
-                      if (error.message?.includes('API key not valid')) {
-                        showMessage('error', '❌ API key không hợp lệ. Vui lòng kiểm tra lại.');
-                      } else if (error.message?.includes('quota')) {
-                        showMessage('error', '⚠️ API key đã hết quota hoặc bị giới hạn.');
-                      } else {
-                        showMessage('error', `❌ Lỗi khi kiểm tra API: ${error.message || 'Unknown error'}`);
-                      }
-                    } finally {
-                      setSaving(false);
-                    }
-                  }}
-                  disabled={saving || !settings.geminiApiKey}
-                  className="mt-3 flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-                >
-                  <Key className="w-4 h-4" />
-                  <span>{saving ? 'Đang kiểm tra...' : 'Kiểm tra API key'}</span>
-                </button>
-              )}
-            </div>
-            
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
               <div className="flex items-start space-x-2">
                 <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5" />
                 <div className="text-sm text-blue-700">
-                  <p className="font-medium mb-1">Hướng dẫn lấy Gemini API Key:</p>
-                  <ol className="list-decimal list-inside space-y-1">
-                    <li>Truy cập Google AI Studio</li>
-                    <li>Đăng nhập với tài khoản Google</li>
-                    <li>Tạo API key mới</li>
-                    <li>Sao chép và dán vào ô trên</li>
-                  </ol>
+                  <p className="font-medium mb-1">Gemini API Key:</p>
+                  <p>Mỗi người dùng có thể cấu hình Gemini API key riêng trên trang Upload Bill. API key được lưu trong trình duyệt và chỉ sử dụng cho OCR đọc ảnh VNPay.</p>
                 </div>
               </div>
             </div>

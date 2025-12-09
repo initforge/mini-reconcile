@@ -92,17 +92,33 @@ const AdminReport: React.FC = () => {
         dateTo: undefined
       };
       
-      const result = await ReportService.getReportRecords(filters, {
+      // Load TẤT CẢ merchant_transactions và merge với report_records
+      // Logic mới: Hiển thị TẤT CẢ merchant transactions, không phụ thuộc vào phiên
+      const result = await ReportService.getAllReportRecordsWithMerchants(filters, {
         limit: 10000 // Load all for sorting, then paginate
       });
       
-      // Filter out UNMATCHED records - không hiển thị trong báo cáo
-      let filteredRecords = result.records.filter(r => r.status !== 'UNMATCHED');
+      // KHÔNG filter UNMATCHED - hiển thị TẤT CẢ records (bao gồm cả merchant transactions chưa có bill)
+      // NHƯNG loại bỏ các records hoàn toàn trống (không có merchant data và không có bill data)
+      let filteredRecords = result.records.filter(r => {
+        // Loại bỏ records hoàn toàn trống: không có merchantTransactionId và không có userBillId
+        // Và không có merchantAmount hoặc amount
+        const hasMerchantData = r.merchantTransactionId || (r.merchantAmount && !isNaN(r.merchantAmount) && r.merchantAmount > 0) || (r.merchantsFileData && Object.keys(r.merchantsFileData).length > 0);
+        const hasBillData = r.userBillId || (r.amount && !isNaN(r.amount) && r.amount > 0);
+        const hasTransactionCode = r.transactionCode && r.transactionCode.trim() !== '';
+        
+        // Chỉ giữ lại nếu có ít nhất merchant data HOẶC bill data, và có transactionCode hợp lệ
+        // Và phải có ít nhất một giá trị amount hợp lệ (> 0)
+        const hasValidAmount = (r.merchantAmount && !isNaN(r.merchantAmount) && r.merchantAmount > 0) || 
+                               (r.amount && !isNaN(r.amount) && r.amount > 0);
+        
+        return (hasMerchantData || hasBillData) && hasTransactionCode && hasValidAmount;
+      });
       
       // Apply date filter client-side (simple logic like "Đợt chi trả" tab)
       if (dateFrom || dateTo) {
         filteredRecords = filteredRecords.filter(r => {
-          const dateToCheck = r.transactionDate || r.userBillCreatedAt || r.reconciledAt || r.createdAt;
+          const dateToCheck = r.transactionDate || r.userBillCreatedAt || r.reconciledAt || r.createdAt || r.merchantTransactionDate;
           if (!dateToCheck) return true;
           
           try {
@@ -123,20 +139,22 @@ const AdminReport: React.FC = () => {
         sortedRecords.sort((a, b) => {
           const agentA = agents.find(ag => ag.id === a.agentId);
           const agentB = agents.find(ag => ag.id === b.agentId);
-          const nameA = agentA?.name || a.agentCode || a.agentId;
-          const nameB = agentB?.name || b.agentCode || b.agentId;
+          const nameA = String(agentA?.name || a.agentCode || a.agentId || '');
+          const nameB = String(agentB?.name || b.agentCode || b.agentId || '');
           const comparison = nameA.localeCompare(nameB, 'vi');
           return sortOrder === 'asc' ? comparison : -comparison;
         });
       } else if (sortBy === 'date') {
         sortedRecords.sort((a, b) => {
-          const dateA = new Date(a.transactionDate || a.createdAt).getTime();
-          const dateB = new Date(b.transactionDate || b.createdAt).getTime();
+          const dateA = new Date(a.transactionDate || a.createdAt || 0).getTime();
+          const dateB = new Date(b.transactionDate || b.createdAt || 0).getTime();
           return sortOrder === 'asc' ? dateA - dateB : dateB - dateA;
         });
       } else if (sortBy === 'amount') {
         sortedRecords.sort((a, b) => {
-          return sortOrder === 'asc' ? a.amount - b.amount : b.amount - a.amount;
+          const amountA = Number(a.amount) || 0;
+          const amountB = Number(b.amount) || 0;
+          return sortOrder === 'asc' ? amountA - amountB : amountB - amountA;
         });
       }
       
@@ -187,6 +205,8 @@ const AdminReport: React.FC = () => {
     setSelectedAgentId('all');
     setSelectedUserId('all');
     setSelectedPointOfSaleName('all');
+    setSortBy('agent'); // Reset to default: sort by agent
+    setSortOrder('asc'); // Reset to default: ascending
     setCurrentPage(1);
   };
 
@@ -202,8 +222,8 @@ const AdminReport: React.FC = () => {
         userId: selectedUserId !== 'all' ? selectedUserId : undefined,
         status: statusFilter !== 'all' ? statusFilter : undefined,
         pointOfSaleName: selectedPointOfSaleName !== 'all' ? selectedPointOfSaleName : undefined,
-        dateFrom: dateFilterActive ? dateFrom : undefined,
-        dateTo: dateFilterActive ? dateTo : undefined
+        dateFrom: (dateFrom && dateFrom.trim() !== '') ? dateFrom : undefined,
+        dateTo: (dateTo && dateTo.trim() !== '') ? dateTo : undefined
       };
       
       const result = await ReportService.getReportRecords(filters, { limit: 100000 });
@@ -259,13 +279,39 @@ const AdminReport: React.FC = () => {
         const feeAmount = (record.amount * feePercentage) / 100;
         const netAmount = record.amount - feeAmount;
 
+        // Format thời gian giao dịch đầy đủ (ngày + giờ)
+        const formatDateTime = (dateString: string | undefined): string => {
+          if (!dateString) return '';
+          try {
+            const date = new Date(dateString);
+            if (isNaN(date.getTime())) return '';
+            // Format: dd/mm/yyyy HH:mm:ss
+            const day = String(date.getDate()).padStart(2, '0');
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const year = date.getFullYear();
+            const hours = String(date.getHours()).padStart(2, '0');
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            const seconds = String(date.getSeconds()).padStart(2, '0');
+            return `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
+          } catch {
+            return '';
+          }
+        };
+
+        // Sắp xếp cột theo đúng thứ tự của file Excel gốc
         return {
-          'STT': index + 1,
-          'Ngày nhập lệnh': record.transactionDate ? new Date(record.transactionDate).toLocaleDateString('vi-VN') : (record.createdAt ? new Date(record.createdAt).toLocaleDateString('vi-VN') : ''),
-          'Mã thanh toán': record.transactionCode || '',
+          // Thứ tự theo file Excel gốc
+          'Thời gian GD': formatDateTime(record.transactionDate || record.merchantTransactionDate || record.createdAt),
+          'Mã giao dịch': record.transactionCode || '',
+          'Chi nhánh': record.merchantBranchName || record.branchName || '',
+          'Mã điểm thu': record.merchantCode || record.agentCode || '',
+          'Điểm thu': record.merchantPointOfSaleName || record.pointOfSaleName || '',
+          'Số hóa đơn': record.merchantInvoiceNumber || record.invoiceNumber || '',
+          'Mã trừ tiền/M': record.transactionCode || '',
+          
+          // Các cột bổ sung (không có trong file Excel gốc nhưng cần cho báo cáo)
           'Đại Lý': record.agentCode || '',
           'Tên đại lý': agent?.name || '',
-          'điểm bán': record.pointOfSaleName || '',
           'Loại thanh toán': record.paymentMethod || '',
           'Số tiền giao dịch': record.amount || 0,
           'Ngày đối soát': record.reconciledAt ? new Date(record.reconciledAt).toLocaleDateString('vi-VN') : '',
@@ -281,12 +327,48 @@ const AdminReport: React.FC = () => {
         };
       });
 
-      const headers = Object.keys(excelData[0] || {});
+      // Định nghĩa thứ tự cột theo đúng file Excel gốc
+      const columnOrder = [
+        'Thời gian GD',
+        'Mã giao dịch',
+        'Chi nhánh',
+        'Mã điểm thu',
+        'Điểm thu',
+        'Số hóa đơn',
+        'Mã trừ tiền/M',
+        'Đại Lý',
+        'Tên đại lý',
+        'Loại thanh toán',
+        'Số tiền giao dịch',
+        'Ngày đối soát',
+        'Phí (%)',
+        'Phí (₫)',
+        'Còn lại',
+        'Trạng thái',
+        'Người dùng',
+        'SĐT',
+        'Ngày TT từ Admin',
+        'Trạng thái TT từ Admin',
+        'Ghi chú'
+      ];
+
+      // Sắp xếp lại excelData theo thứ tự cột đã định nghĩa
+      const orderedExcelData = excelData.map(row => {
+        const orderedRow: Record<string, any> = {};
+        columnOrder.forEach(key => {
+          if (key in row) {
+            orderedRow[key] = row[key];
+          }
+        });
+        return orderedRow;
+      });
+
+      const headers = columnOrder.filter(key => orderedExcelData[0] && key in orderedExcelData[0]);
       const numberColumns = identifyNumberColumns(headers);
       const dateColumns = identifyDateColumns(headers);
 
-      // Create workbook
-      const workbook = createStyledWorkbook();
+      // Create workbook with xlsx-js-style (supports real styling)
+      const workbook = XLSX.utils.book_new();
       const sheet = XLSX.utils.aoa_to_sheet([[]]);
 
       // Add summary row at the top with colored highlights
@@ -297,75 +379,26 @@ const AdminReport: React.FC = () => {
         { col: 13, label: 'Số tiền sau khi trừ phí', value: totalNet, color: 'FFFF00' } // Yellow
       ];
 
-      summaryCells.forEach(({ col, label, value, color }) => {
-        // Label cell
+      // Add summary row (without styling for now - regular xlsx doesn't support it)
+      summaryCells.forEach(({ col, label, value }) => {
         const labelAddress = XLSX.utils.encode_cell({ r: 0, c: col });
-        sheet[labelAddress] = { v: label, t: 's' };
+        sheet[labelAddress] = { v: `[${label}: ${typeof value === 'number' ? new Intl.NumberFormat('vi-VN').format(value) : value}]`, t: 's' };
         
-        // Value cell
         const valueAddress = XLSX.utils.encode_cell({ r: 0, c: col + 1 });
         sheet[valueAddress] = { v: value, t: 'n', z: '#,##0' };
-        
-        // Style label cell
-        if (!sheet['!styles']) sheet['!styles'] = [];
-        if (!sheet['!styles'][labelAddress]) sheet['!styles'][labelAddress] = {};
-        Object.assign(sheet['!styles'][labelAddress], {
-          font: { name: 'Arial', bold: true, sz: 11, color: { rgb: '000000' } },
-          fill: { fgColor: { rgb: color } },
-          alignment: { horizontal: 'left', vertical: 'center' },
-          border: {
-            top: { style: 'thin', color: { rgb: '000000' } },
-            bottom: { style: 'thin', color: { rgb: '000000' } },
-            left: { style: 'thin', color: { rgb: '000000' } },
-            right: { style: 'thin', color: { rgb: '000000' } }
-          }
-        });
-        
-        // Style value cell
-        if (!sheet['!styles'][valueAddress]) sheet['!styles'][valueAddress] = {};
-        Object.assign(sheet['!styles'][valueAddress], {
-          font: { name: 'Arial', bold: true, sz: 11, color: { rgb: '000000' } },
-          fill: { fgColor: { rgb: color } },
-          alignment: { horizontal: 'right', vertical: 'center' },
-          border: {
-            top: { style: 'thin', color: { rgb: '000000' } },
-            bottom: { style: 'thin', color: { rgb: '000000' } },
-            left: { style: 'thin', color: { rgb: '000000' } },
-            right: { style: 'thin', color: { rgb: '000000' } }
-          }
-        });
       });
 
       // Add headers at row 2
       headers.forEach((header, colIndex) => {
         const cellAddress = XLSX.utils.encode_cell({ r: 1, c: colIndex });
         sheet[cellAddress] = { v: header, t: 's' };
-        
-        // Apply header style
-        if (!sheet['!styles']) {
-          sheet['!styles'] = [];
-        }
-        if (!sheet['!styles'][cellAddress]) {
-          sheet['!styles'][cellAddress] = {};
-        }
-        Object.assign(sheet['!styles'][cellAddress], {
-          fill: { fgColor: { rgb: '2563EB' } },
-          font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 11, name: 'Arial' },
-          alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
-          border: {
-            top: { style: 'thin', color: { rgb: '1E40AF' } },
-            bottom: { style: 'thin', color: { rgb: '1E40AF' } },
-            left: { style: 'thin', color: { rgb: '1E40AF' } },
-            right: { style: 'thin', color: { rgb: '1E40AF' } }
-          }
-        });
       });
 
       // Find status column index for conditional formatting
       const statusColIndex = headers.indexOf('Trạng thái');
       
       // Add data rows starting from row 3
-      excelData.forEach((row, rowIndex) => {
+      orderedExcelData.forEach((row, rowIndex) => {
         const statusValue = row['Trạng thái' as keyof typeof row];
         const isError = statusValue === 'Lỗi';
         const isMatched = statusValue === 'Khớp';
@@ -374,69 +407,45 @@ const AdminReport: React.FC = () => {
           const cellAddress = XLSX.utils.encode_cell({ r: rowIndex + 2, c: colIndex });
           const value = row[header as keyof typeof row];
           
+          let cellData: any = {};
+          
           if (numberColumns.includes(colIndex)) {
             const numValue = typeof value === 'number' ? value : parseFloat(String(value).replace(/[^\d.-]/g, ''));
             if (!isNaN(numValue)) {
-              sheet[cellAddress] = { v: numValue, t: 'n', z: '#,##0' };
+              cellData = { v: numValue, t: 'n', z: '#,##0' };
             } else {
-              sheet[cellAddress] = { v: value, t: 's' };
+              cellData = { v: value, t: 's' };
             }
           } else if (dateColumns.includes(colIndex)) {
             const dateValue = value instanceof Date ? value : new Date(value as string);
             if (!isNaN(dateValue.getTime())) {
-              sheet[cellAddress] = { v: dateValue, t: 'd', z: 'dd/mm/yyyy' };
+              cellData = { v: dateValue, t: 'd', z: 'dd/mm/yyyy' };
             } else {
-              sheet[cellAddress] = { v: value, t: 's' };
+              cellData = { v: value, t: 's' };
             }
           } else {
-            sheet[cellAddress] = { v: value, t: 's' };
+            cellData = { v: value, t: 's' };
           }
           
-          // Apply cell style
-          if (!sheet['!styles']) {
-            sheet['!styles'] = [];
-          }
-          if (!sheet['!styles'][cellAddress]) {
-            sheet['!styles'][cellAddress] = {};
-          }
-          
-          const cellStyle: any = {
-            font: {
-              name: 'Arial',
-              sz: 10,
-              color: { rgb: '000000' }
-            },
-            alignment: {
-              horizontal: numberColumns.includes(colIndex) ? 'right' : 'left',
-              vertical: 'center',
-              wrapText: true
-            },
-            border: {
-              top: { style: 'thin', color: { rgb: 'E2E8F0' } },
-              bottom: { style: 'thin', color: { rgb: 'E2E8F0' } },
-              left: { style: 'thin', color: { rgb: 'E2E8F0' } },
-              right: { style: 'thin', color: { rgb: 'E2E8F0' } }
-            }
-          };
-          
-          // Alternating row colors
-          if (rowIndex % 2 === 1) {
-            cellStyle.fill = { fgColor: { rgb: 'F8FAFC' } }; // Slate 50
-          }
-          
-          // Highlight status column based on value
+          // Add text markers for status highlighting (regular xlsx doesn't support colors)
           if (colIndex === statusColIndex) {
             if (isError) {
-              cellStyle.fill = { fgColor: { rgb: 'FEE2E2' } }; // Red 100
-              cellStyle.font = { ...cellStyle.font, bold: true, color: { rgb: '991B1B' } }; // Red 800
+              cellData.v = `🔴 ${cellData.v}`;
             } else if (isMatched) {
-              cellStyle.fill = { fgColor: { rgb: 'D1FAE5' } }; // Green 100
-              cellStyle.font = { ...cellStyle.font, bold: true, color: { rgb: '065F46' } }; // Green 800
+              cellData.v = `✅ ${cellData.v}`;
             }
           }
           
-          Object.assign(sheet['!styles'][cellAddress], cellStyle);
+          sheet[cellAddress] = cellData;
         });
+      });
+
+      // Set sheet range - CRITICAL: This tells Excel where the data is
+      const maxRow = Math.max(1, orderedExcelData.length + 1); // Row 0 (summary), Row 1 (headers), Row 2+ (data)
+      const maxCol = headers.length - 1;
+      sheet['!ref'] = XLSX.utils.encode_range({
+        s: { r: 0, c: 0 },
+        e: { r: maxRow, c: maxCol }
       });
 
       // Set column widths
@@ -456,7 +465,7 @@ const AdminReport: React.FC = () => {
         }
         
         // Check all data rows
-        excelData.forEach(row => {
+        orderedExcelData.forEach(row => {
           const value = row[header as keyof typeof row];
           if (value !== null && value !== undefined) {
             const length = String(value).length;
@@ -469,21 +478,12 @@ const AdminReport: React.FC = () => {
         };
       });
 
-      // Set sheet range
-      sheet['!ref'] = XLSX.utils.encode_range({
-        s: { r: 0, c: 0 },
-        e: { r: excelData.length + 1, c: headers.length - 1 }
-      });
-
-      // Freeze header row
-      sheet['!freeze'] = { xSplit: 0, ySplit: 2, topLeftCell: 'A3', activePane: 'bottomLeft', state: 'frozen' };
-
       XLSX.utils.book_append_sheet(workbook, sheet, 'Báo cáo đối soát');
 
       // Add metadata sheet
       const settings = await SettingsService.getSettings();
-      const dateRange = dateFilterActive 
-        ? `${dateFrom} - ${dateTo}`
+      const dateRange = (dateFrom && dateFrom.trim() !== '') || (dateTo && dateTo.trim() !== '')
+        ? `${dateFrom || ''} - ${dateTo || ''}`
         : 'Tất cả';
       addMetadataSheet(workbook, settings, {
         exportDate: new Date().toISOString(),
@@ -503,15 +503,15 @@ const AdminReport: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6">
-        <div className="flex items-center justify-between">
+      <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4 md:p-6">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div>
-            <h2 className="text-2xl font-bold text-slate-900">Báo cáo đối soát</h2>
-            <p className="text-sm text-slate-500 mt-1">Xem và quản lý tất cả bản ghi đối soát</p>
+            <h2 className="text-xl md:text-2xl font-bold text-slate-900">Báo cáo đối soát</h2>
+            <p className="text-xs md:text-sm text-slate-500 mt-1">Xem và quản lý tất cả bản ghi đối soát</p>
           </div>
           <button
             onClick={handleExportExcel}
-            className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+            className="flex items-center space-x-2 px-3 md:px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm md:text-base w-full sm:w-auto justify-center"
           >
             <Download className="w-4 h-4" />
             <span>Xuất Excel</span>
@@ -539,15 +539,15 @@ const AdminReport: React.FC = () => {
         
         {/* Sorting Controls */}
         <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4">
-          <div className="flex items-center space-x-4">
-            <label className="text-sm font-medium text-slate-700">Sắp xếp theo:</label>
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4">
+            <label className="text-sm font-medium text-slate-700 whitespace-nowrap">Sắp xếp theo:</label>
             <select
               value={sortBy}
               onChange={(e) => {
                 setSortBy(e.target.value as 'agent' | 'date' | 'amount');
                 setCurrentPage(1);
               }}
-              className="px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
+              className="w-full sm:w-auto px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
             >
               <option value="agent">Đại lý</option>
               <option value="date">Ngày giao dịch</option>
@@ -558,7 +558,7 @@ const AdminReport: React.FC = () => {
                 setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
                 setCurrentPage(1);
               }}
-              className="px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 transition-colors"
+              className="w-full sm:w-auto px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 transition-colors whitespace-nowrap"
             >
               {sortOrder === 'asc' ? '↑ Tăng dần' : '↓ Giảm dần'}
             </button>
