@@ -15,7 +15,7 @@ const AgentPayments: React.FC = () => {
 
   const { data: usersData } = useRealtimeData<Record<string, User>>('/users');
   const { data: billsData } = useRealtimeData<Record<string, UserBill>>('/user_bills');
-  const { data: agentPaymentsData } = useRealtimeData<Record<string, AgentPaymentToUser>>('/agent_payments_to_users');
+  // XÓA: Không cần agentPaymentsData nữa vì chỉ dùng user_bills.agentPaymentStatus
   const users = FirebaseUtils.objectToArray(usersData || {});
   
   // TRUY VẤN TRỰC TIẾP TỪ BẢNG BÁO CÁO: Load ReportRecords từ getAllReportRecordsWithMerchants
@@ -154,29 +154,10 @@ const AgentPayments: React.FC = () => {
           })));
         }
         
-        // Get all payments to check if bills are already paid
-        const allPayments = FirebaseUtils.objectToArray(agentPaymentsData || {});
-        const paidBillIds = new Set<string>();
-        allPayments.forEach((payment: AgentPaymentToUser) => {
-          if (payment.agentId === agentId && payment.status === 'PAID' && payment.billIds) {
-            payment.billIds.forEach(billId => paidBillIds.add(billId));
-          }
-        });
-        console.log(`📊 Found ${paidBillIds.size} paid bills for agent ${agentCode}`);
-        
-        // Filter unpaid bills: bills that belong to this agent and haven't been paid
+        // ĐƠN GIẢN HÓA: Chỉ check agentPaymentStatus trong user_bills
         const unpaidBills = agentBills.filter((bill: UserBill) => {
-          // Check if bill is paid by agent
-          if (bill.isPaidByAgent === true) {
-            return false; // Already paid
-          }
-          
-          // Check if there's a PAID AgentPaymentToUser record for this bill
-          if (paidBillIds.has(bill.id)) {
-            return false; // Already paid via payment batch
-          }
-          
-          return true;
+          // Chưa thanh toán nếu: không có agentPaymentStatus hoặc agentPaymentStatus !== 'PAID'
+          return !bill.agentPaymentStatus || bill.agentPaymentStatus !== 'PAID';
         });
         console.log(`📊 Found ${unpaidBills.length} unpaid bills for agent ${agentCode}`);
         
@@ -279,30 +260,45 @@ const AgentPayments: React.FC = () => {
     };
     
     loadUnpaidBills();
-  }, [agentId, agentCode, billsData, reportRecordsFromDB, agentPaymentsData]);
+  }, [agentId, agentCode, billsData, reportRecordsFromDB]);
 
-  // Load AgentPaymentToUser batches (only PAID ones for "Đợt chi trả" tab)
+  // Load paid bills (for "Đợt chi trả" tab) - ĐƠN GIẢN HÓA: Query từ user_bills
   useEffect(() => {
     const loadBatches = () => {
       if (!agentId) return;
       
-      const allPayments = FirebaseUtils.objectToArray(agentPaymentsData || {});
-      const agentPayments = allPayments.filter((payment: AgentPaymentToUser) => 
-        payment.agentId === agentId && payment.status === 'PAID' // Only show PAID batches in "Đợt chi trả" tab
+      const allBills = FirebaseUtils.objectToArray(billsData || {});
+      const agentBills = allBills.filter((bill: UserBill) => 
+        bill.agentId === agentId && bill.agentPaymentStatus === 'PAID'
       );
       
-      // Sort by createdAt descending
-      agentPayments.sort((a, b) => {
-        const dateA = new Date(a.createdAt || a.paidAt || 0).getTime();
-        const dateB = new Date(b.createdAt || b.paidAt || 0).getTime();
+      // Group by agentPaidAt date (có thể group theo ngày hoặc để trống)
+      // Sort by agentPaidAt descending
+      agentBills.sort((a, b) => {
+        const dateA = new Date(a.agentPaidAt || 0).getTime();
+        const dateB = new Date(b.agentPaidAt || 0).getTime();
         return dateB - dateA;
       });
       
-      setPaymentBatches(agentPayments);
+      // Convert to AgentPaymentToUser format để tương thích với UI hiện tại (tạm thời)
+      // TODO: Refactor UI để không cần format này
+      const batches: AgentPaymentToUser[] = agentBills.map((bill: UserBill) => ({
+        id: bill.id,
+        agentId: bill.agentId,
+        userId: bill.userId,
+        billIds: [bill.id],
+        totalAmount: bill.amount,
+        status: 'PAID' as AgentPaymentStatus,
+        note: bill.agentPaidNote || '',
+        createdAt: bill.agentPaidAt || bill.createdAt,
+        paidAt: bill.agentPaidAt
+      }));
+      
+      setPaymentBatches(batches);
     };
     
     loadBatches();
-  }, [agentId, agentPaymentsData]);
+  }, [agentId, billsData]);
 
   // Filter unpaid reports (simple logic like "Đợt chi trả" tab)
   const filteredUnpaidReports = useMemo(() => {
@@ -468,35 +464,22 @@ const AgentPayments: React.FC = () => {
     try {
       const selectedReportsList = filteredUnpaidReports.filter(r => selectedReports.includes(r.id));
       const totalAmount = selectedReportsList.reduce((sum, report) => sum + report.amount, 0);
-      const billIds = selectedReportsList.map(r => r.userBillId);
 
-      // Create AgentPaymentToUser record
-      const paymentRef = await push(ref(database, 'agent_payments_to_users'), {
-        agentId: agentId!,
-        billIds,
-        totalAmount,
-        status: 'PAID' as AgentPaymentStatus,
-        note,
-        createdAt: FirebaseUtils.getServerTimestamp(),
-        paidAt: FirebaseUtils.getServerTimestamp()
-      });
-
-      // Update user_bills
+      // ĐƠN GIẢN HÓA: Chỉ update user_bills với agentPaymentStatus = 'PAID'
       const updates: any = {};
       selectedReportsList.forEach(report => {
-        updates[`user_bills/${report.userBillId}/isPaidByAgent`] = true;
-        updates[`user_bills/${report.userBillId}/paidByAgentAt`] = FirebaseUtils.getServerTimestamp();
-        updates[`user_bills/${report.userBillId}/paidByAgentNote`] = note;
-        updates[`user_bills/${report.userBillId}/agentPaymentId`] = paymentRef.key;
-        
-        // Update ReportRecord với agentPaymentId, agentPaidAt, agentPaymentStatus (nếu có)
-        if (report.id) {
-          updates[`report_records/${report.id}/agentPaymentId`] = paymentRef.key;
-          updates[`report_records/${report.id}/agentPaidAt`] = FirebaseUtils.getServerTimestamp();
-          updates[`report_records/${report.id}/agentPaymentStatus`] = 'PAID';
+        if (report.userBillId) {
+          updates[`user_bills/${report.userBillId}/agentPaymentStatus`] = 'PAID';
+          updates[`user_bills/${report.userBillId}/agentPaidAt`] = FirebaseUtils.getServerTimestamp();
+          if (note) {
+            updates[`user_bills/${report.userBillId}/agentPaidNote`] = note;
+          }
         }
       });
-      await update(ref(database), updates);
+      
+      if (Object.keys(updates).length > 0) {
+        await update(ref(database), updates);
+      }
 
       alert('Đánh dấu thanh toán thành công!');
       setSelectedReports([]);
@@ -1034,28 +1017,15 @@ const AgentPayments: React.FC = () => {
                               onClick={async () => {
                                 if (window.confirm('Bạn có chắc chắn muốn đổi trạng thái từ "Đã thanh toán" về "Chưa thanh toán"?')) {
                                   try {
+                                    // ĐƠN GIẢN HÓA: Chỉ update user_bills với agentPaymentStatus = 'UNPAID'
                                     const updates: any = {};
-                                    updates[`agent_payments_to_users/${batch.id}/status`] = 'UNPAID';
-                                    updates[`agent_payments_to_users/${batch.id}/paidAt`] = null;
-                                    
-                                    // Update user_bills
                                     if (batch.billIds) {
                                       batch.billIds.forEach((billId: string) => {
-                                        updates[`user_bills/${billId}/isPaidByAgent`] = false;
-                                        updates[`user_bills/${billId}/paidByAgentAt`] = null;
+                                        updates[`user_bills/${billId}/agentPaymentStatus`] = 'UNPAID';
+                                        updates[`user_bills/${billId}/agentPaidAt`] = null;
+                                        updates[`user_bills/${billId}/agentPaidNote`] = null;
                                       });
                                     }
-                                    
-                                    // Update report_records
-                                    const allReportsSnapshot = await get(ref(database, 'report_records'));
-                                    const allReports = FirebaseUtils.objectToArray(allReportsSnapshot.val() || {});
-                                    const relatedReports = allReports.filter((r: any) => 
-                                      batch.billIds?.includes(r.userBillId) && r.agentPaymentId === batch.id
-                                    );
-                                    relatedReports.forEach((r: any) => {
-                                      updates[`report_records/${r.id}/agentPaymentStatus`] = 'UNPAID';
-                                      updates[`report_records/${r.id}/agentPaidAt`] = null;
-                                    });
                                     
                                     await update(ref(database), updates);
                                     // Reload unpaid reports to show reverted bills in "Chưa thanh toán" tab

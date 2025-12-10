@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Save, Upload, RefreshCw, Building, Key, AlertCircle, CheckCircle, X } from 'lucide-react';
+import { Save, Upload, RefreshCw, Building, Key, AlertCircle, CheckCircle, X, Trash2 } from 'lucide-react';
 import { AppSettings } from '../types';
 import { SettingsService } from '../src/lib/firebaseServices';
+import { DeduplicateService } from '../src/lib/deduplicateService';
 
 const Settings: React.FC = () => {
   // Initialize with default settings so UI is always usable
@@ -16,7 +17,8 @@ const Settings: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
-  const [activeTab, setActiveTab] = useState<'company' | 'api'>('company');
+  const [activeTab, setActiveTab] = useState<'company' | 'api' | 'maintenance'>('company');
+  const [deduplicating, setDeduplicating] = useState(false);
 
   // Load settings on component mount
   useEffect(() => {
@@ -307,6 +309,14 @@ const Settings: React.FC = () => {
         >
           API & Tích hợp
         </button>
+        <button
+          onClick={() => setActiveTab('maintenance')}
+          className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+            activeTab === 'maintenance' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-800'
+          }`}
+        >
+          Bảo trì
+        </button>
       </div>
 
       {/* Content */}
@@ -422,6 +432,79 @@ const Settings: React.FC = () => {
                 <div className="text-sm text-blue-700">
                   <p className="font-medium mb-1">Gemini API Key:</p>
                   <p>Mỗi người dùng có thể cấu hình Gemini API key riêng trên trang Upload Bill. API key được lưu trong trình duyệt và chỉ sử dụng cho OCR đọc ảnh VNPay.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'maintenance' && (
+          <div className="space-y-6">
+            <h3 className="text-lg font-semibold text-slate-800 flex items-center space-x-2">
+              <Trash2 className="w-5 h-5" />
+              <span>Bảo trì hệ thống</span>
+            </h3>
+            
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+              <div className="flex items-start space-x-2">
+                <AlertCircle className="w-5 h-5 text-yellow-600 mt-0.5" />
+                <div className="text-sm text-yellow-700">
+                  <p className="font-medium mb-1">Cảnh báo:</p>
+                  <p>Chức năng này sẽ xóa các bản ghi trùng lặp trong database. Chỉ nên chạy khi cần thiết.</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
+              <div>
+                <h4 className="text-md font-semibold text-slate-800 mb-2">Xóa duplicate mã chuẩn chi</h4>
+                <p className="text-sm text-slate-600 mb-4">
+                  Xóa các bản ghi trùng lặp trong report_records và merchant_transactions dựa trên mã chuẩn chi (transactionCode).
+                  Chỉ giữ lại 1 bản ghi cho mỗi mã chuẩn chi.
+                </p>
+                <div className="flex space-x-3">
+                  <button
+                    onClick={async () => {
+                      if (!window.confirm('Bạn có chắc chắn muốn xóa duplicate report_records? Hành động này không thể hoàn tác.')) {
+                        return;
+                      }
+                      setDeduplicating(true);
+                      try {
+                        const result = await DeduplicateService.deduplicateReportRecords();
+                        alert(`Đã xóa ${result.removed} duplicate records, giữ lại ${result.kept} records.`);
+                      } catch (error: any) {
+                        alert(`Lỗi: ${error.message || 'Vui lòng thử lại'}`);
+                      } finally {
+                        setDeduplicating(false);
+                      }
+                    }}
+                    disabled={deduplicating}
+                    className="flex items-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>{deduplicating ? 'Đang xử lý...' : 'Xóa duplicate Report Records'}</span>
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (!window.confirm('Bạn có chắc chắn muốn xóa duplicate merchant_transactions? Hành động này không thể hoàn tác.')) {
+                        return;
+                      }
+                      setDeduplicating(true);
+                      try {
+                        const result = await DeduplicateService.deduplicateMerchantTransactions();
+                        alert(`Đã xóa ${result.removed} duplicate transactions, giữ lại ${result.kept} transactions.`);
+                      } catch (error: any) {
+                        alert(`Lỗi: ${error.message || 'Vui lòng thử lại'}`);
+                      } finally {
+                        setDeduplicating(false);
+                      }
+                    }}
+                    disabled={deduplicating}
+                    className="flex items-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>{deduplicating ? 'Đang xử lý...' : 'Xóa duplicate Merchant Transactions'}</span>
+                  </button>
                 </div>
               </div>
             </div>

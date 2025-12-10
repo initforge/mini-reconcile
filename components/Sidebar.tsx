@@ -1,16 +1,18 @@
 
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Users, Store, FileText, Settings, UploadCloud, CreditCard, UserCog, LogOut, BarChart3 } from 'lucide-react';
+import { Users, Store, FileText, Settings, UploadCloud, CreditCard, UserCog, LogOut, BarChart3, X } from 'lucide-react';
 import { SettingsService } from '../src/lib/firebaseServices';
 import { AppSettings } from '../types';
 
 interface SidebarProps {
   activeTab: string;
   onLogout?: () => void;
+  isMobileOpen?: boolean;
+  onMobileClose?: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout, isMobileOpen = false, onMobileClose }) => {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [adminName, setAdminName] = useState<string>('Admin User');
 
@@ -60,32 +62,39 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout }) => {
   const companyName = settings?.companyName || 'PayReconcile';
   const logoUrl = settings?.logoUrl;
 
-  return (
+  // Shared sidebar content component
+  const SidebarContent = () => (
     <>
-      {/* Mobile overlay */}
-      <div className="hidden md:block fixed inset-0 bg-black/50 z-[90] md:hidden" />
-      
-      {/* Sidebar */}
-      <div className="hidden md:flex w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white min-h-screen flex-col shadow-2xl fixed left-0 top-0 z-[100] border-r border-slate-700">
       <div className="p-6 border-b border-slate-700/50">
-        <div className="flex items-center space-x-3">
-          {logoUrl ? (
-            <div className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center bg-white/10 border border-white/20">
-              <img 
-                src={logoUrl} 
-                alt={companyName}
-                className="w-full h-full object-contain"
-              />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            {logoUrl ? (
+              <div className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center bg-white/10 border border-white/20">
+                <img 
+                  src={logoUrl} 
+                  alt={companyName}
+                  className="w-full h-full object-contain"
+                />
+              </div>
+            ) : (
+              <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                <UploadCloud className="w-6 h-6 text-white" />
+              </div>
+            )}
+            <div>
+              <span className="text-xl font-bold tracking-tight text-white">{companyName}</span>
+              <p className="text-xs text-slate-400 mt-0.5">Hệ thống đối soát</p>
             </div>
-          ) : (
-            <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/20">
-              <UploadCloud className="w-6 h-6 text-white" />
-            </div>
-          )}
-          <div>
-            <span className="text-xl font-bold tracking-tight text-white">{companyName}</span>
-            <p className="text-xs text-slate-400 mt-0.5">Hệ thống đối soát</p>
           </div>
+          {/* Mobile close button */}
+          {onMobileClose && (
+            <button
+              onClick={onMobileClose}
+              className="lg:hidden p-2 rounded-lg hover:bg-slate-700/50 transition-colors"
+            >
+              <X className="w-5 h-5 text-white" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -98,6 +107,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout }) => {
               key={item.id}
               to={item.path}
               replace={false}
+              onClick={onMobileClose}
               className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 group ${
                 isActive
                   ? 'bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-lg shadow-indigo-500/30'
@@ -129,7 +139,30 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout }) => {
           <span>Đăng xuất</span>
         </button>
       </div>
-    </div>
+    </>
+  );
+
+  return (
+    <>
+      {/* Mobile overlay */}
+      {isMobileOpen && (
+        <div 
+          className="lg:hidden fixed inset-0 bg-black/50 z-[90] transition-opacity"
+          onClick={onMobileClose}
+        />
+      )}
+      
+      {/* Desktop Sidebar */}
+      <div className="hidden lg:flex w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white min-h-screen flex-col shadow-2xl fixed left-0 top-0 z-[100] border-r border-slate-700">
+        <SidebarContent />
+      </div>
+
+      {/* Mobile Drawer */}
+      <div className={`lg:hidden fixed inset-y-0 left-0 w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white flex-col shadow-2xl z-[100] border-r border-slate-700 transform transition-transform duration-300 ease-in-out ${
+        isMobileOpen ? 'translate-x-0' : '-translate-x-full'
+      }`}>
+        <SidebarContent />
+      </div>
     </>
   );
 };

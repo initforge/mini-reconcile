@@ -177,10 +177,10 @@ export interface UserBill {
   status: 'PENDING' | 'MATCHED' | 'ERROR';
   errorMessage?: string; // Error message đơn giản, văn phong Việt
   
-  // Payment tracking
-  isPaidByAgent: boolean; // Đại lý đã thanh toán chưa
-  paidByAgentAt?: string;
-  paidByAgentNote?: string;
+  // Payment tracking - Agent → User
+  agentPaymentStatus?: AgentPaymentStatus; // UNPAID | PAID (default: UNPAID)
+  agentPaidAt?: string; // ISO timestamp - khi agentPaymentStatus = 'PAID'
+  agentPaidNote?: string; // Ghi chú khi thanh toán
   
   // Session tracking
   uploadSessionId?: string; // ID của session upload (khi user upload nhiều bills cùng lúc)
@@ -536,16 +536,13 @@ export interface ReportRecord {
   isManuallyEdited?: boolean;
   editedFields?: string[];
   
-  // Payment tracking - Luồng Admin → Agent
-  adminPaymentId?: string; // Link với AdminPaymentToAgent
-  adminBatchId?: string; // Link với PaymentBatch
-  adminPaidAt?: string; // ISO timestamp
+  // Payment tracking - Luồng Admin → Agent (trực tiếp trong report_records)
+  adminBatchId?: string; // Optional: ID của batch nếu cần group payments
+  adminPaidAt?: string; // ISO timestamp - khi adminPaymentStatus = 'PAID'
   adminPaymentStatus?: AdminPaymentStatus; // UNPAID | PAID | PARTIAL | CANCELLED | DRAFT
   
-  // Payment tracking - Luồng Agent → User
-  agentPaymentId?: string; // Link với AgentPaymentToUser
-  agentPaidAt?: string; // ISO timestamp (hoặc dùng user_bills.paidByAgentAt)
-  agentPaymentStatus?: AgentPaymentStatus; // UNPAID | PAID
+  // Payment tracking - Luồng Agent → User (dùng user_bills.agentPaymentStatus thay vì đây)
+  // agentPaymentStatus đã được move sang user_bills để đơn giản hóa
   
   // Fee calculation (cached for performance)
   feeAmount?: number; // Phí chiết khấu

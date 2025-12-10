@@ -15,7 +15,7 @@ const Payouts: React.FC = () => {
   // Firebase hooks for agents data and user bills
   const { data: agentsData } = useRealtimeData<Record<string, Agent>>('/agents');
   const { data: userBillsData } = useRealtimeData<Record<string, UserBill>>('/user_bills');
-  const { data: adminPaymentsData } = useRealtimeData<Record<string, AdminPaymentToAgent>>('/admin_payments_to_agents');
+  // XÓA: Không cần adminPaymentsData nữa vì chỉ dùng report_records
   
   const [activeTab, setActiveTab] = useState<'unpaid' | 'batches'>('unpaid');
   const [searchTerm, setSearchTerm] = useState('');
@@ -72,7 +72,7 @@ const Payouts: React.FC = () => {
   // Convert Firebase data to arrays - memoize to prevent infinite loops
   const agents = useMemo(() => FirebaseUtils.objectToArray(agentsData || {}), [agentsData]);
   const allUserBills = useMemo(() => FirebaseUtils.objectToArray(userBillsData || {}), [userBillsData]);
-  const allAdminPayments = useMemo(() => FirebaseUtils.objectToArray(adminPaymentsData || {}), [adminPaymentsData]);
+  // XÓA: Không cần allAdminPayments nữa
 
   // Reset state when route changes (force re-render)
   useEffect(() => {
@@ -84,6 +84,7 @@ const Payouts: React.FC = () => {
   }, [location.pathname]);
 
   // Load matched report_records that haven't been paid by admin
+  // ĐƠN GIẢN HÓA: Chỉ check adminPaymentStatus trong report_records
   const loadUnpaidReports = React.useCallback(async () => {
     try {
       const result = await ReportService.getReportRecords(
@@ -91,49 +92,21 @@ const Payouts: React.FC = () => {
         { limit: 10000 } // Get all for now, can optimize later
       );
       
-      // Filter out reports that are already paid (check both adminPaymentId and paymentStatus)
+      // ĐƠN GIẢN: Chỉ filter theo adminPaymentStatus trong report_records
+      // Chưa thanh toán = không có adminPaymentStatus hoặc adminPaymentStatus !== 'PAID'
       const unpaid = result.records.filter(report => {
-        // Check if report has adminPaymentId and paymentStatus is PAID
-        if (report.adminPaymentId && report.adminPaymentStatus === 'PAID') {
-          return false; // Already paid
-        }
-        
-        // Check if there's an AdminPaymentToAgent record for this bill
-        // Logic giống bên đại lý: chỉ hiển thị nếu chưa có payment hoặc payment chưa được thanh toán
-        const relatedPayments = allAdminPayments.filter((payment: AdminPaymentToAgent) => 
-          payment.billIds.includes(report.userBillId)
-        );
-        
-        // Nếu có payment với status PAID, thì đã thanh toán -> loại bỏ
-        const hasPaidPayment = relatedPayments.some((payment: AdminPaymentToAgent) => 
-          payment.paymentStatus === 'PAID'
-        );
-        if (hasPaidPayment) {
-          return false; // Already paid
-        }
-        
-        // Nếu có payment với status UNPAID nhưng có batchId (đã từng được thanh toán rồi revert),
-        // thì cũng loại bỏ vì đây là duplicate từ lần revert
-        // Chỉ hiển thị nếu chưa có payment nào hoặc payment chưa có batchId (chưa từng được thanh toán)
-        const hasRevertedPayment = relatedPayments.some((payment: AdminPaymentToAgent) => 
-          payment.paymentStatus === 'UNPAID' && payment.batchId
-        );
-        if (hasRevertedPayment) {
-          return false; // This is a reverted payment, don't show duplicate
-        }
-        
-        return true; // No payment or payment is truly unpaid (never been paid)
+        return !report.adminPaymentStatus || report.adminPaymentStatus !== 'PAID';
       });
       
       setUnpaidReports(unpaid);
     } catch (error) {
       console.error('Error loading unpaid reports:', error);
     }
-  }, [allAdminPayments]);
+  }, []);
 
   useEffect(() => {
     loadUnpaidReports();
-  }, [loadUnpaidReports, allAdminPayments]);
+  }, [loadUnpaidReports]);
 
   // Load data - UI first, then data
   useEffect(() => {
@@ -159,11 +132,58 @@ const Payouts: React.FC = () => {
   const loadPaymentBatches = async (page: number = 1, reset: boolean = false) => {
     try {
       setLoadingBatches(true);
-      const { batches, hasMore, total } = await PaymentsService.getBatches(page, 1000); // Load all for filtering
+      
+      // ĐƠN GIẢN: Load từ report_records với adminPaymentStatus = 'PAID', group theo ngày thanh toán
+      const result = await ReportService.getReportRecords({}, { limit: 10000 });
+      const paidReports = result.records.filter(r => r.adminPaymentStatus === 'PAID');
+      
+      // Group theo ngày thanh toán (adminPaidAt date) - ĐƠN GIẢN, không dùng batch
+      const batchesByDate = new Map<string, ReportRecord[]>();
+      paidReports.forEach(report => {
+        const dateKey = report.adminPaidAt ? report.adminPaidAt.split('T')[0] : 'no-date';
+        if (!batchesByDate.has(dateKey)) {
+          batchesByDate.set(dateKey, []);
+        }
+        batchesByDate.get(dateKey)!.push(report);
+      });
+      
+      // Convert to batch-like structure
+      const batches: Array<{
+        id: string;
+        name: string;
+        paidAt?: string;
+        createdAt: string;
+        totalAmount: number;
+        totalFees: number;
+        netAmount: number;
+        paymentCount: number;
+        agentCount: number;
+        paymentStatus: 'PAID';
+      }> = [];
+      
+      batchesByDate.forEach((reports, dateKey) => {
+        const firstReport = reports[0];
+        const totalAmount = reports.reduce((sum, r) => sum + (r.amount || 0), 0);
+        const totalFees = reports.reduce((sum, r) => sum + (r.feeAmount || 0), 0);
+        const netAmount = reports.reduce((sum, r) => sum + (r.netAmount || r.amount || 0), 0);
+        const uniqueAgents = new Set(reports.map(r => r.agentId).filter(Boolean));
+        
+        batches.push({
+          id: dateKey,
+          name: `Đợt chi trả ${firstReport.adminPaidAt ? new Date(firstReport.adminPaidAt).toLocaleDateString('vi-VN') : 'Chưa xác định'}`,
+          paidAt: firstReport.adminPaidAt,
+          createdAt: firstReport.adminPaidAt || firstReport.createdAt,
+          totalAmount,
+          totalFees,
+          netAmount,
+          paymentCount: reports.length,
+          agentCount: uniqueAgents.size,
+          paymentStatus: 'PAID' as const
+        });
+      });
       
       // Apply filters
-      // Only show PAID batches in "Đợt chi trả" tab (UNPAID batches should appear in "Chưa thanh toán" tab)
-      let filteredBatches = batches.filter(batch => batch.paymentStatus === 'PAID');
+      let filteredBatches = batches;
       
       // Filter by date range (paidAt or createdAt)
       if (batchesDateFrom || batchesDateTo) {
@@ -186,11 +206,10 @@ const Payouts: React.FC = () => {
         });
       }
       
-      // Filter by search term (approvalCode or name)
+      // Filter by search term (name only - không còn approvalCode)
       if (batchesSearchTerm) {
         const searchLower = batchesSearchTerm.toLowerCase();
         filteredBatches = filteredBatches.filter(batch => 
-          (batch.approvalCode && batch.approvalCode.toLowerCase().includes(searchLower)) ||
           batch.name.toLowerCase().includes(searchLower)
         );
       }
@@ -220,7 +239,7 @@ const Payouts: React.FC = () => {
         setBatchesTotal(updatedBatches.length);
       }
       
-      setBatchesHasMore(hasMore && filteredBatches.length >= (page * batchesItemsPerPage));
+      setBatchesHasMore(false); // No pagination needed since we load all
     } catch (error) {
       console.error('Error loading payment batches:', error);
       setPaymentBatches([]);
@@ -442,95 +461,25 @@ const Payouts: React.FC = () => {
         reportsByAgentMap[report.agentId].push(report);
       });
 
-      // Create AdminPaymentToAgent for each agent
-      const paymentIds: string[] = [];
-      let batchTotalAmount = 0;
-      let batchTotalFees = 0;
-      let batchNetAmount = 0;
+      // ĐƠN GIẢN: Chỉ update adminPaymentStatus và adminPaidAt trong report_records
+      const updates: any = {};
+      let totalReports = 0;
       
-      for (const [agentId, reports] of Object.entries(reportsByAgentMap)) {
-        const agent = agents.find(a => a.id === agentId);
-        if (!agent) continue;
-
-        // Calculate totals for selected reports
-        let totalAmount = 0;
-        let totalFee = 0;
-        
-        reports.forEach(report => {
-          totalAmount += report.amount;
-          
-          const paymentMethod = report.paymentMethod;
-          const pointOfSaleName = report.pointOfSaleName;
-          
-          let feePercentage = 0;
-          if (agent?.discountRatesByPointOfSale && pointOfSaleName && agent.discountRatesByPointOfSale[pointOfSaleName]) {
-            feePercentage = agent.discountRatesByPointOfSale[pointOfSaleName][paymentMethod] || 0;
-          } else if (agent?.discountRates) {
-            feePercentage = agent.discountRates[paymentMethod] || 0;
-          }
-          
-          const fee = (report.amount * feePercentage) / 100;
-          totalFee += fee;
-        });
-
-        const paymentRef = await push(ref(database, 'admin_payments_to_agents'), {
-          agentId,
-          agentCode: agent.code,
-          billIds: reports.map(r => r.userBillId), // Use userBillId from report
-          totalAmount,
-          feeAmount: totalFee,
-          netAmount: totalAmount - totalFee,
-          note: batchName,
-          paidAt: FirebaseUtils.getServerTimestamp(),
-          paymentStatus: 'PAID' as const,
-          createdAt: FirebaseUtils.getServerTimestamp(),
-          createdBy: 'admin' // TODO: Get from auth
-        } as Omit<AdminPaymentToAgent, 'id'>);
-
-        paymentIds.push(paymentRef.key!);
-        batchTotalAmount += totalAmount;
-        batchTotalFees += totalFee;
-        batchNetAmount += (totalAmount - totalFee);
-
-        // Update ReportRecord with adminPaymentId, adminPaidAt, adminPaymentStatus
-        const reportUpdates: any = {};
-        reports.forEach(report => {
-          reportUpdates[`report_records/${report.id}/adminPaymentId`] = paymentRef.key;
-          reportUpdates[`report_records/${report.id}/adminPaidAt`] = FirebaseUtils.getServerTimestamp();
-          reportUpdates[`report_records/${report.id}/adminPaymentStatus`] = 'PAID';
-        });
-        await update(ref(database), reportUpdates);
+      selectedReportsList.forEach(report => {
+        // Chỉ update nếu report.id là ID thật (không phải virtual)
+        if (report.id && !report.id.startsWith('virtual_')) {
+          updates[`report_records/${report.id}/adminPaymentStatus`] = 'PAID';
+          updates[`report_records/${report.id}/adminPaidAt`] = FirebaseUtils.getServerTimestamp();
+          totalReports++;
+        }
+      });
+      
+      // Batch update tất cả report_records
+      if (Object.keys(updates).length > 0) {
+        await update(ref(database), updates);
       }
 
-      // Create PaymentBatch
-      const timestamp = Date.now();
-      const random = Math.random().toString(36).substring(2, 8).toUpperCase();
-      const approvalCode = `BATCH-${timestamp}-${random}`;
-      
-      const batchId = await PaymentsService.createBatch({
-        name: batchName,
-        totalAmount: batchTotalAmount,
-        totalFees: batchTotalFees,
-        netAmount: batchNetAmount,
-        paymentIds,
-        paymentCount: paymentIds.length,
-        agentCount: Object.keys(reportsByAgentMap).length,
-        status: 'DRAFT',
-        createdAt: FirebaseUtils.getServerTimestamp(),
-        createdBy: 'admin', // TODO: Get from auth
-        paymentStatus: 'PAID' as const,
-        paidAt: FirebaseUtils.getServerTimestamp(),
-        approvalCode
-      });
-
-      // Update AdminPaymentToAgent với batchId
-      const batchIdUpdates: any = {};
-      paymentIds.forEach(paymentId => {
-        batchIdUpdates[`admin_payments_to_agents/${paymentId}/batchId`] = batchId;
-      });
-      await update(ref(database), batchIdUpdates);
-
-      alert(`Đã tạo đợt chi trả "${batchName}" thành công với ${paymentIds.length} thanh toán!`);
+      alert(`Đã đánh dấu thanh toán "${batchName}" thành công cho ${totalReports} giao dịch!`);
       setSelectedReports([]);
       setBatchName('');
       setShowBatchModal(false);
@@ -541,9 +490,9 @@ const Payouts: React.FC = () => {
       setBatchesSearchTerm('');
       setBatchesPage(1);
       
-      // Reload data
-      await loadPaymentBatches(1, true);
+      // Reload data - QUAN TRỌNG: Reload cả unpaid và batches
       await loadUnpaidReports();
+      await loadPaymentBatches(1, true); // Reload batches để hiển thị trong "Đợt chi trả"
     } catch (error: any) {
       alert(`Đã xảy ra lỗi: ${error.message || 'Vui lòng thử lại'}`);
     } finally {
@@ -685,39 +634,79 @@ const Payouts: React.FC = () => {
     }
   };
 
-  // Revert batch - chuyển batch về DRAFT và clear payment links
-  const handleRevertBatch = async (batchId: string) => {
-    if (!window.confirm('Bạn có chắc chắn muốn đổi trạng thái đợt chi trả này về "Nháp"? Tất cả thanh toán liên quan sẽ được chuyển về "Chưa thanh toán".')) {
+  // Revert payment - đổi status về UNPAID (ĐƠN GIẢN, không cần batch)
+  const handleRevertPayment = async (dateKey: string) => {
+    if (!window.confirm('Bạn có chắc chắn muốn đổi trạng thái thanh toán này về "Chưa thanh toán"? Tất cả giao dịch trong ngày này sẽ được chuyển về "Chưa thanh toán".')) {
       return;
     }
 
     try {
-      await PaymentsService.revertPaymentBatch(batchId);
-      alert('Đã đổi trạng thái thành công! Đợt chi trả đã được chuyển về "Nháp" và sẽ không còn hiển thị trong tab "Đợt chi trả".');
+      // Load tất cả reports đã thanh toán trong ngày này
+      const result = await ReportService.getReportRecords({}, { limit: 10000 });
+      const reportsToRevert = result.records.filter(r => {
+        if (r.adminPaymentStatus !== 'PAID' || !r.adminPaidAt) return false;
+        const paidDate = r.adminPaidAt.split('T')[0];
+        return paidDate === dateKey;
+      });
+
+      // Update status về UNPAID
+      const updates: any = {};
+      reportsToRevert.forEach(report => {
+        if (report.id && !report.id.startsWith('virtual_')) {
+          updates[`report_records/${report.id}/adminPaymentStatus`] = 'UNPAID';
+          updates[`report_records/${report.id}/adminPaidAt`] = null;
+        }
+      });
+
+      if (Object.keys(updates).length > 0) {
+        await update(ref(database), updates);
+        alert(`Đã đổi trạng thái thành công! ${reportsToRevert.length} giao dịch đã được chuyển về "Chưa thanh toán".`);
+      }
+
       // Reload data
       await loadUnpaidReports();
       await loadPaymentBatches(1, true);
     } catch (error: any) {
-      console.error('Error reverting batch:', error);
+      console.error('Error reverting payment:', error);
       alert(`Có lỗi khi đổi trạng thái: ${error.message || 'Vui lòng thử lại'}`);
     }
   };
 
-  // Delete batch
-  const handleDeleteBatch = async (batchId: string) => {
-    if (!window.confirm(`Bạn có chắc chắn muốn xóa đợt chi trả này? Tất cả payments và dữ liệu liên quan sẽ bị xóa.`)) {
+  // Delete payment - xóa tất cả records đã thanh toán trong ngày này (ĐƠN GIẢN, không cần batch)
+  const handleDeletePayment = async (dateKey: string) => {
+    if (!window.confirm(`Bạn có chắc chắn muốn xóa thanh toán này? Tất cả giao dịch trong ngày này sẽ bị xóa khỏi lịch sử thanh toán.`)) {
       return;
     }
 
     try {
-      await PaymentsService.deleteBatch(batchId);
-      alert('Xóa đợt chi trả thành công!');
+      // Load tất cả reports đã thanh toán trong ngày này
+      const result = await ReportService.getReportRecords({}, { limit: 10000 });
+      const reportsToDelete = result.records.filter(r => {
+        if (r.adminPaymentStatus !== 'PAID' || !r.adminPaidAt) return false;
+        const paidDate = r.adminPaidAt.split('T')[0];
+        return paidDate === dateKey;
+      });
+
+      // Xóa payment info (không xóa report record, chỉ xóa payment status)
+      const updates: any = {};
+      reportsToDelete.forEach(report => {
+        if (report.id && !report.id.startsWith('virtual_')) {
+          updates[`report_records/${report.id}/adminPaymentStatus`] = null;
+          updates[`report_records/${report.id}/adminPaidAt`] = null;
+        }
+      });
+
+      if (Object.keys(updates).length > 0) {
+        await update(ref(database), updates);
+        alert(`Xóa thanh toán thành công! ${reportsToDelete.length} giao dịch đã được xóa khỏi lịch sử thanh toán.`);
+      }
+
       // Reload data
       await loadUnpaidReports();
       await loadPaymentBatches(1, true);
     } catch (error: any) {
-      console.error('Error deleting batch:', error);
-      alert(`Có lỗi khi xóa đợt chi trả: ${error.message || 'Vui lòng thử lại'}`);
+      console.error('Error deleting payment:', error);
+      alert(`Có lỗi khi xóa: ${error.message || 'Vui lòng thử lại'}`);
     }
   };
 
@@ -1432,14 +1421,14 @@ const Payouts: React.FC = () => {
                     <div className="flex items-center space-x-2">
                       {batch.paymentStatus === 'PAID' && (
                     <button
-                          onClick={() => handleRevertBatch(batch.id)}
+                          onClick={() => handleRevertPayment(batch.id)}
                           className="flex items-center space-x-2 px-3 py-2 bg-yellow-100 text-yellow-700 rounded-lg hover:bg-yellow-200 transition-colors"
                         >
                           <span>Revert</span>
                         </button>
                       )}
                       <button
-                        onClick={() => handleDeleteBatch(batch.id)}
+                        onClick={() => handleDeletePayment(batch.id)}
                       className="flex items-center space-x-2 px-3 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors"
                     >
                       <Trash2 className="w-4 h-4" />

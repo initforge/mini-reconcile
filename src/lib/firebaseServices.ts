@@ -1176,16 +1176,36 @@ export const MerchantTransactionsService = {
     const skipped: Array<{ transactionCode: string; reason: string }> = [];
     const updates: any = {};
     
-    // Load existing byCode mapping
+    // Load TẤT CẢ merchant_transactions từ database để check duplicate
+    const snapshot = await get(ref(database, 'merchant_transactions'));
+    const allExistingTransactions = FirebaseUtils.objectToArray<MerchantTransaction>(snapshot.val() || {});
+    const existingCodesSet = new Set<string>();
+    allExistingTransactions.forEach(t => {
+      if (t.transactionCode) {
+        existingCodesSet.add(String(t.transactionCode).trim());
+      }
+    });
+    
+    // Load existing byCode mapping (for backward compatibility)
     const byCodeSnapshot = await get(ref(database, 'merchant_transactions/byCode'));
     const existingCodes = byCodeSnapshot.val() || {};
     
     for (const transaction of transactions) {
-      const transactionCode = transaction.transactionCode;
+      const transactionCode = String(transaction.transactionCode).trim();
       
-      // Check if transaction code already exists
+      // Check if transaction code already exists trong database
+      if (existingCodesSet.has(transactionCode)) {
+        console.warn(`⚠️ Mã chuẩn chi "${transactionCode}" đã tồn tại trong database, bỏ qua`);
+        skipped.push({
+          transactionCode,
+          reason: 'Mã chuẩn chi đã tồn tại trong hệ thống'
+        });
+        continue;
+      }
+      
+      // Double check với byCode mapping (backward compatibility)
       if (existingCodes[transactionCode]) {
-        console.warn(`⚠️ Mã chuẩn chi "${transactionCode}" đã tồn tại, bỏ qua`);
+        console.warn(`⚠️ Mã chuẩn chi "${transactionCode}" đã tồn tại trong byCode mapping, bỏ qua`);
         skipped.push({
           transactionCode,
           reason: 'Mã chuẩn chi đã tồn tại trong hệ thống'
@@ -1230,8 +1250,9 @@ export const MerchantTransactionsService = {
       // Update byCode mapping
       updates[`merchant_transactions/byCode/${transactionCode}`] = newId;
       
-      // Track in local map for this batch
+      // Track in local map for this batch (để tránh duplicate trong cùng batch)
       existingCodes[transactionCode] = newId;
+      existingCodesSet.add(transactionCode);
     }
     
     // Apply all updates (byCode mappings) in one batch

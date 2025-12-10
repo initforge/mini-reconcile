@@ -13,6 +13,8 @@ import { createStyledWorkbook, addMetadataSheet, exportWorkbook, identifyNumberC
 const AdminReport: React.FC = () => {
   const { data: usersData } = useRealtimeData<Record<string, User>>('/users');
   const { data: agentsData } = useRealtimeData<Record<string, Agent>>('/agents');
+  // Thêm realtime listener cho report_records để tự động reload khi có thay đổi
+  const { data: reportRecordsData } = useRealtimeData<Record<string, ReportRecord>>('/report_records');
   const users = FirebaseUtils.objectToArray(usersData || {});
   const agents = FirebaseUtils.objectToArray(agentsData || {});
 
@@ -72,10 +74,10 @@ const AdminReport: React.FC = () => {
     return Array.from(posSet).sort();
   }, [records, allPointOfSales]);
 
-  // Load reports - reload when filters change
+  // Load reports - reload when filters change hoặc khi report_records thay đổi
   useEffect(() => {
     loadReports();
-  }, [dateFrom, dateTo, statusFilter, selectedAgentId, selectedUserId, selectedPointOfSaleName, currentPage, sortBy, sortOrder]);
+  }, [dateFrom, dateTo, statusFilter, selectedAgentId, selectedUserId, selectedPointOfSaleName, currentPage, sortBy, sortOrder, reportRecordsData]);
 
   const loadReports = async () => {
     setLoading(true);
@@ -133,8 +135,39 @@ const AdminReport: React.FC = () => {
         });
       }
       
+      // DEDUPLICATE: Chỉ giữ lại 1 ReportRecord cho mỗi transactionCode (chỉ dựa trên mã chuẩn chi)
+      // Không quan tâm userBillId, agentId - chỉ cần transactionCode unique
+      const seenTransactionCodes = new Map<string, ReportRecord>();
+      filteredRecords.forEach(report => {
+        if (!report.transactionCode) return;
+        
+        const code = String(report.transactionCode).trim();
+        if (!code) return;
+        
+        const existing = seenTransactionCodes.get(code);
+        if (!existing) {
+          // Chưa có → thêm vào
+          seenTransactionCodes.set(code, report);
+        } else {
+          // Đã có → giữ record đầu tiên (hoặc có thể giữ record có merchantTransactionId nếu muốn)
+          // Logic đơn giản: giữ record đầu tiên tìm thấy
+          // Nếu muốn ưu tiên record có merchant data: giữ record có merchantTransactionId
+          if (report.merchantTransactionId && !existing.merchantTransactionId) {
+            seenTransactionCodes.set(code, report);
+          }
+          // Nếu không, giữ record cũ (đã có trước)
+        }
+      });
+      
+      const deduplicatedRecords = Array.from(seenTransactionCodes.values());
+      console.log(`📊 [AdminReport] Loaded ${filteredRecords.length} records, after deduplication: ${deduplicatedRecords.length}`);
+      if (filteredRecords.length !== deduplicatedRecords.length) {
+        const duplicates = filteredRecords.length - deduplicatedRecords.length;
+        console.warn(`⚠️ [AdminReport] Removed ${duplicates} duplicate transaction codes`);
+      }
+      
       // Sort records by agent (default for Admin)
-      let sortedRecords = [...filteredRecords];
+      let sortedRecords = [...deduplicatedRecords];
       if (sortBy === 'agent') {
         sortedRecords.sort((a, b) => {
           const agentA = agents.find(ag => ag.id === a.agentId);

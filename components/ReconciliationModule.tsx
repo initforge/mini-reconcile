@@ -505,54 +505,85 @@ const ReconciliationModule: React.FC = () => {
         return true;
       });
       
-      // Remove duplicates dựa trên transactionCode
-      const seenCodes = new Map<string, MerchantTransaction>();
-      const duplicateDetails: Array<{code: string, count: number, files: string[]}> = [];
+      // BƯỚC 1: Lọc duplicate TRONG FILE EXCEL (trong cùng batch) - tự động lọc ngay, giống user upload bills
+      // Chỉ giữ lại transaction đầu tiên cho mỗi transactionCode
+      const seenCodesInFile = new Map<string, MerchantTransaction>();
+      const skippedInFile: Array<{code: string; reason: string}> = [];
       
       for (const item of validData) {
-        if (seenCodes.has(item.transactionCode)) {
-          // Duplicate found
-          const existing = duplicateDetails.find(d => d.code === item.transactionCode);
-          if (existing) {
-            existing.count++;
-            if (!existing.files.includes(item.sourceFile)) {
-              existing.files.push(item.sourceFile);
-            }
-          } else {
-            const firstItem = seenCodes.get(item.transactionCode)!;
-            duplicateDetails.push({ 
-              code: item.transactionCode, 
-              count: 2,
-              files: [firstItem.sourceFile, item.sourceFile]
-            });
-          }
-          console.log(`🔄 Duplicate mã chuẩn chi: ${item.transactionCode} (đã có ${duplicateDetails.find(d => d.code === item.transactionCode)?.count || 2} lần)`);
+        const code = String(item.transactionCode).trim();
+        if (seenCodesInFile.has(code)) {
+          // Duplicate trong file Excel - tự động lọc bỏ (giống user upload bills)
+          skippedInFile.push({
+            code,
+            reason: 'Mã chuẩn chi trùng lặp trong file Excel'
+          });
+          console.warn(`⚠️ Mã chuẩn chi "${code}" trùng lặp trong file Excel, tự động lọc bỏ`);
         } else {
-          seenCodes.set(item.transactionCode, item);
+          seenCodesInFile.set(code, item);
         }
       }
       
-      const uniqueData = Array.from(seenCodes.values());
-      const duplicatesRemoved = validData.length - uniqueData.length;
+      const uniqueInFile = Array.from(seenCodesInFile.values());
       
-      if (duplicatesRemoved > 0) {
-        console.log(`🗑️ Removed ${duplicatesRemoved} duplicate transactions (dựa trên mã chuẩn chi)`);
-        duplicateDetails.forEach(d => {
-          console.log(`   - ${d.code}: ${d.count} lần (files: ${d.files.join(', ')})`);
-        });
-      } else {
-        console.log(`✅ Không có duplicate transactions - tất cả ${uniqueData.length} mã chuẩn chi đều unique`);
+      if (skippedInFile.length > 0) {
+        console.log(`🗑️ Đã tự động lọc ${skippedInFile.length} giao dịch do mã chuẩn chi trùng lặp trong file Excel`);
       }
 
-      setMerchantData(uniqueData);
-      console.log(`🎯 Final merged data: ${uniqueData.length} unique transactions from ${files.length} files`);
+      // BƯỚC 2: Load tất cả merchant_transactions từ database để check duplicate với hệ thống
+      // Logic giống như khi user upload bills - tự động lọc duplicate ngay
+      const existingMerchantsSnapshot = await get(ref(database, 'merchant_transactions'));
+      const existingMerchants = FirebaseUtils.objectToArray<MerchantTransaction>(existingMerchantsSnapshot.val() || {});
+      const existingCodesSet = new Set<string>();
+      existingMerchants.forEach(t => {
+        if (t.transactionCode) {
+          existingCodesSet.add(String(t.transactionCode).trim());
+        }
+      });
+
+      // Lọc duplicate với database - chỉ giữ lại transactions chưa có trong database
+      const finalUniqueData: MerchantTransaction[] = [];
+      const skippedFromDatabase: Array<{code: string; reason: string}> = [];
+      
+      for (const item of uniqueInFile) {
+        const code = String(item.transactionCode).trim();
+        if (existingCodesSet.has(code)) {
+          // Đã tồn tại trong database - bỏ qua (giống như khi user upload bills trùng)
+          skippedFromDatabase.push({
+            code,
+            reason: 'Mã chuẩn chi đã tồn tại trong hệ thống'
+          });
+          console.warn(`⚠️ Mã chuẩn chi "${code}" đã tồn tại trong database, tự động lọc bỏ`);
+        } else {
+          // Chưa tồn tại - thêm vào danh sách
+          finalUniqueData.push(item);
+          existingCodesSet.add(code); // Track để tránh duplicate trong cùng batch
+        }
+      }
+
+      // Tổng hợp thông báo
+      const totalSkipped = skippedInFile.length + skippedFromDatabase.length;
+      if (totalSkipped > 0) {
+        console.log(`🗑️ Tổng cộng đã tự động lọc ${totalSkipped} giao dịch:`);
+        if (skippedInFile.length > 0) {
+          console.log(`   - ${skippedInFile.length} giao dịch do mã chuẩn chi trùng lặp trong file Excel`);
+        }
+        if (skippedFromDatabase.length > 0) {
+          console.log(`   - ${skippedFromDatabase.length} giao dịch do mã chuẩn chi đã tồn tại trong hệ thống`);
+        }
+      } else {
+        console.log(`✅ Không có duplicate - tất cả ${finalUniqueData.length} mã chuẩn chi đều unique`);
+      }
+
+      setMerchantData(finalUniqueData);
+      console.log(`🎯 Final data sau khi lọc duplicate: ${finalUniqueData.length} unique transactions từ ${files.length} files`);
       
       // Save to merchant_transactions with uploadSessionId
       const uploadSessionId = `UPLOAD_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       setCurrentUploadSessionId(uploadSessionId);
       
-      console.log(`💾 Saving ${uniqueData.length} merchant transactions to database...`);
-      const transactionsToSave = uniqueData.map(item => {
+      console.log(`💾 Saving ${finalUniqueData.length} merchant transactions to database...`);
+      const transactionsToSave = finalUniqueData.map(item => {
         // Map old MerchantTransaction format to new format
         let transactionDate: string;
         try {
@@ -601,10 +632,23 @@ const ReconciliationModule: React.FC = () => {
       
       const result = await MerchantTransactionsService.createBatch(transactionsToSave);
       console.log(`✅ Saved ${result.created.length} merchant transactions with uploadSessionId: ${uploadSessionId}`);
-      if (result.skipped.length > 0) {
-        console.warn(`⚠️ Đã bỏ qua ${result.skipped.length} giao dịch do mã chuẩn chi trùng lặp:`);
-        result.skipped.forEach(s => console.warn(`   - ${s.transactionCode}: ${s.reason}`));
-        alert(`Đã lưu ${result.created.length} giao dịch. Bỏ qua ${result.skipped.length} giao dịch do mã chuẩn chi trùng lặp.`);
+      
+      // Tổng hợp thông báo về duplicate đã được lọc (bao gồm cả skipped khi save)
+      const totalSkippedFinal = skippedInFile.length + skippedFromDatabase.length + result.skipped.length;
+      if (totalSkippedFinal > 0) {
+        let message = `Đã lưu ${result.created.length} giao dịch.`;
+        if (skippedInFile.length > 0) {
+          message += `\nĐã tự động lọc ${skippedInFile.length} giao dịch do mã chuẩn chi trùng lặp trong file Excel.`;
+        }
+        if (skippedFromDatabase.length > 0) {
+          message += `\nĐã tự động lọc ${skippedFromDatabase.length} giao dịch do mã chuẩn chi đã tồn tại trong hệ thống.`;
+        }
+        if (result.skipped.length > 0) {
+          message += `\nBỏ qua ${result.skipped.length} giao dịch do mã chuẩn chi trùng lặp khi lưu.`;
+        }
+        alert(message);
+      } else {
+        alert(`Đã lưu ${result.created.length} giao dịch thành công!`);
       }
       
       // Tự động đối soát TẤT CẢ bills với merchant transactions vừa upload
@@ -624,7 +668,20 @@ const ReconciliationModule: React.FC = () => {
             reportsByBillId.set(report.userBillId, report);
           }
           if (report.transactionCode) {
-            reportsByTransactionCode.set(String(report.transactionCode).trim(), report);
+            const code = String(report.transactionCode).trim();
+            const existing = reportsByTransactionCode.get(code);
+            // Nếu đã có record với transactionCode này, chỉ giữ lại 1 (ưu tiên có userBillId)
+            if (!existing) {
+              reportsByTransactionCode.set(code, report);
+            } else {
+              // Ưu tiên: có userBillId > không có userBillId
+              // Nếu cùng có/không có userBillId → giữ record mới hơn
+              if ((!existing.userBillId && report.userBillId) ||
+                  (existing.userBillId === report.userBillId && 
+                   new Date(report.createdAt || 0).getTime() > new Date(existing.createdAt || 0).getTime())) {
+                reportsByTransactionCode.set(code, report);
+              }
+            }
           }
         });
         
@@ -664,9 +721,16 @@ const ReconciliationModule: React.FC = () => {
             }
             
             // Tìm ReportRecord hiện có
+            // Ưu tiên: 1) Tìm bằng userBillId, 2) Tìm bằng transactionCode
             let report = reportsByBillId.get(bill.id);
             if (!report && code) {
               report = reportsByTransactionCode.get(code);
+              // Nếu tìm thấy bằng transactionCode nhưng userBillId khác → đây là duplicate
+              // Chỉ update nếu report này chưa có userBillId hoặc userBillId match
+              if (report && report.userBillId && report.userBillId !== bill.id) {
+                console.warn(`⚠️ [ReconciliationModule] Duplicate transactionCode ${code} detected: existing report ${report.id} has userBillId ${report.userBillId}, new bill ${bill.id}. Skipping to avoid duplicate.`);
+                continue; // Skip bill này để tránh tạo duplicate
+              }
             }
             
             // So sánh amount và pointOfSaleName

@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileText, CreditCard, Settings, LogOut } from 'lucide-react';
+import { FileText, CreditCard, Settings, LogOut, X } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useRealtimeData, FirebaseUtils } from '../../src/lib/firebaseHooks';
 import type { Agent } from '../../types';
@@ -7,9 +7,11 @@ import type { Agent } from '../../types';
 interface AgentSidebarProps {
   activeTab: string;
   onLogout: () => void;
+  isMobileOpen?: boolean;
+  onMobileClose?: () => void;
 }
 
-const AgentSidebar: React.FC<AgentSidebarProps> = ({ activeTab, onLogout }) => {
+const AgentSidebar: React.FC<AgentSidebarProps> = ({ activeTab, onLogout, isMobileOpen = false, onMobileClose }) => {
   const navigate = useNavigate();
   const location = useLocation();
   
@@ -27,17 +29,29 @@ const AgentSidebar: React.FC<AgentSidebarProps> = ({ activeTab, onLogout }) => {
     { id: 'utilities', label: 'Tiện Ích', icon: Settings, path: '/agent/utilities' },
   ];
 
-  return (
-    <div className="hidden md:flex w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white min-h-screen flex-col shadow-2xl fixed left-0 top-0 z-[100] border-r border-slate-700">
+  // Shared sidebar content component
+  const SidebarContent = () => (
+    <>
       <div className="p-6 border-b border-slate-700/50">
-        <div className="flex items-center space-x-3 mb-2">
-          <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center">
-            <span className="text-xl font-bold">P</span>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-3 mb-2">
+            <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center">
+              <span className="text-xl font-bold">P</span>
+            </div>
+            <div>
+              <h1 className="text-xl font-bold">{agent?.name || 'PayReconcile'}</h1>
+              <p className="text-xs text-slate-400">{agent?.code ? `Đại lý - ${agent.code}` : 'Đại lý'}</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-xl font-bold">{agent?.name || 'PayReconcile'}</h1>
-            <p className="text-xs text-slate-400">{agent?.code ? `Đại lý - ${agent.code}` : 'Đại lý'}</p>
-          </div>
+          {/* Mobile close button */}
+          {onMobileClose && (
+            <button
+              onClick={onMobileClose}
+              className="lg:hidden p-2 rounded-lg hover:bg-slate-700/50 transition-colors"
+            >
+              <X className="w-5 h-5 text-white" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -49,7 +63,10 @@ const AgentSidebar: React.FC<AgentSidebarProps> = ({ activeTab, onLogout }) => {
           return (
             <button
               key={item.id}
-              onClick={() => navigate(item.path)}
+              onClick={() => {
+                navigate(item.path);
+                onMobileClose?.();
+              }}
               className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${
                 isActive
                   ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/50 transform scale-[1.02]'
@@ -83,7 +100,31 @@ const AgentSidebar: React.FC<AgentSidebarProps> = ({ activeTab, onLogout }) => {
           <span className="font-medium">Đăng xuất</span>
         </button>
       </div>
-    </div>
+    </>
+  );
+
+  return (
+    <>
+      {/* Mobile overlay */}
+      {isMobileOpen && (
+        <div 
+          className="lg:hidden fixed inset-0 bg-black/50 z-[90] transition-opacity"
+          onClick={onMobileClose}
+        />
+      )}
+      
+      {/* Desktop Sidebar */}
+      <div className="hidden lg:flex w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white min-h-screen flex-col shadow-2xl fixed left-0 top-0 z-[100] border-r border-slate-700">
+        <SidebarContent />
+      </div>
+
+      {/* Mobile Drawer */}
+      <div className={`lg:hidden fixed inset-y-0 left-0 w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white flex-col shadow-2xl z-[100] border-r border-slate-700 transform transition-transform duration-300 ease-in-out ${
+        isMobileOpen ? 'translate-x-0' : '-translate-x-full'
+      }`}>
+        <SidebarContent />
+      </div>
+    </>
   );
 };
 

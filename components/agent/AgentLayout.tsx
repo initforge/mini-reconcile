@@ -1,11 +1,13 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLocation, Outlet } from 'react-router-dom';
+import { Menu } from 'lucide-react';
 import AgentSidebar from './AgentSidebar';
 import { useRealtimeData, FirebaseUtils } from '../../src/lib/firebaseHooks';
 import type { Agent } from '../../types';
 
 const AgentLayout: React.FC = () => {
   const location = useLocation();
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   
   // Get current tab from path
   const getActiveTab = () => {
@@ -29,11 +31,38 @@ const AgentLayout: React.FC = () => {
     window.location.href = '/agent/login';
   };
 
+  // Close mobile menu when route changes
+  useEffect(() => {
+    setIsMobileMenuOpen(false);
+  }, [location.pathname]);
+
   return (
     <div className="flex min-h-screen bg-slate-50" style={{ position: 'relative' }}>
-      <AgentSidebar activeTab={getActiveTab()} onLogout={handleLogout} />
+      <AgentSidebar 
+        activeTab={getActiveTab()} 
+        onLogout={handleLogout}
+        isMobileOpen={isMobileMenuOpen}
+        onMobileClose={() => setIsMobileMenuOpen(false)}
+      />
       
-      <main className="flex-1 md:ml-64 p-4 md:p-8 overflow-y-auto h-screen" style={{ position: 'relative', zIndex: 1 }}>
+      <main className="flex-1 lg:ml-64 p-4 md:p-8 overflow-y-auto h-screen" style={{ position: 'relative', zIndex: 1 }}>
+        {/* Mobile Header */}
+        <div className="lg:hidden mb-4 pb-4 border-b border-slate-200">
+          <div className="flex items-center justify-between">
+            <button
+              onClick={() => setIsMobileMenuOpen(true)}
+              className="p-2 rounded-lg hover:bg-slate-100 transition-colors"
+            >
+              <Menu className="w-6 h-6 text-slate-700" />
+            </button>
+            <div className="text-right">
+              <p className="text-xs text-slate-500">
+                {new Date().toLocaleDateString('vi-VN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+              </p>
+            </div>
+          </div>
+        </div>
+
         <header className="flex justify-between items-center mb-6 md:mb-8">
           <div>
             <h1 className="text-xl md:text-2xl font-bold text-slate-900">
@@ -47,7 +76,7 @@ const AgentLayout: React.FC = () => {
               {agent?.name && `${agent.name} (${agent.code})`}
             </p>
           </div>
-          <div className="text-right">
+          <div className="hidden lg:block text-right">
             <p className="text-sm text-slate-500">
               {new Date().toLocaleDateString('vi-VN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
             </p>

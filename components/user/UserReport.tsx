@@ -16,9 +16,9 @@ const UserReport: React.FC = () => {
     return today.toISOString().split('T')[0];
   };
 
-  // Filter state - default to today for display, but don't filter initially
-  const [dateFrom, setDateFrom] = useState<string>(getTodayDate());
-  const [dateTo, setDateTo] = useState<string>(getTodayDate());
+  // Filter state - KHÔNG filter date mặc định, để hiển thị tất cả
+  const [dateFrom, setDateFrom] = useState<string>('');
+  const [dateTo, setDateTo] = useState<string>('');
   const [dateFilterActive, setDateFilterActive] = useState(false);
   const [statusFilter, setStatusFilter] = useState<ReportStatus | 'all'>('all');
   const [selectedPointOfSaleName, setSelectedPointOfSaleName] = useState<string>('all');
@@ -89,23 +89,31 @@ const UserReport: React.FC = () => {
         limit: 10000 // Load all for client-side filtering
       });
       
-      // KHÔNG filter UNMATCHED - hiển thị TẤT CẢ records (MATCHED, ERROR, UNMATCHED)
-      // Chỉ filter các records không hợp lệ (không có transactionCode hoặc amount)
+      console.log(`📊 [UserReport] Loaded ${result.records.length} records for userId: ${userId}`);
+      
+      // Filter: CHỈ hiển thị records có userId match
       let filteredRecords = result.records.filter(r => {
         // Loại bỏ records không có transactionCode hoặc amount hợp lệ
         if (!r.transactionCode || r.transactionCode.trim() === '') return false;
         if (!r.amount || isNaN(r.amount) || !isFinite(r.amount) || r.amount <= 0) return false;
+        
+        // QUAN TRỌNG: Filter theo userId
+        if (r.userId && r.userId !== userId) return false;
+        
         return true;
       });
       
-      // Apply date filter client-side (simple logic like "Đợt chi trả" tab)
+      console.log(`📊 [UserReport] After filtering: ${filteredRecords.length} records`);
+      
+      // Apply date filter client-side
       if (dateFrom || dateTo) {
         filteredRecords = filteredRecords.filter(r => {
           const dateToCheck = r.transactionDate || r.userBillCreatedAt || r.reconciledAt || r.createdAt;
           if (!dateToCheck) return true;
           
           try {
-            const dateStr = typeof dateToCheck === 'string' ? dateToCheck : dateToCheck.toISOString();
+            // Tất cả date fields trong ReportRecord đều là string (ISO format)
+            const dateStr = String(dateToCheck);
             const date = dateStr.split('T')[0];
             if (dateFrom && date < dateFrom) return false;
             if (dateTo && date > dateTo) return false;
@@ -130,8 +138,8 @@ const UserReport: React.FC = () => {
   };
 
   const handleClearFilters = () => {
-    setDateFrom(getTodayDate());
-    setDateTo(getTodayDate());
+    setDateFrom('');
+    setDateTo('');
     setDateFilterActive(false);
     setStatusFilter('all');
     setSelectedPointOfSaleName('all');
@@ -192,6 +200,8 @@ const UserReport: React.FC = () => {
                 currentPage={currentPage}
                 totalPages={totalPages}
                 onPageChange={setCurrentPage}
+                itemsPerPage={itemsPerPage}
+                totalItems={totalRecords}
               />
             </div>
           )}
@@ -202,4 +212,3 @@ const UserReport: React.FC = () => {
 };
 
 export default UserReport;
-
