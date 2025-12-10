@@ -439,14 +439,11 @@ export const UserService = {
       
       if (report) {
         // Bill đã có ReportRecord
-        // Kiểm tra xem có merchant data không (merchantTransactionId, merchantAmount, hoặc merchantsFileData)
+        // Kiểm tra xem có merchant data không (merchantTransactionId là dấu hiệu rõ ràng nhất)
         hasMerchantTransaction = !!(
           report.merchantTransactionId || 
-          report.merchantAmount || 
-          report.merchantsFileData ||
-          report.merchantCode ||
-          report.merchantPointOfSaleName ||
-          report.merchantBranchName
+          (report.merchantAmount && report.merchantAmount > 0) ||
+          (report.merchantsFileData && Object.keys(report.merchantsFileData).length > 0)
         );
       }
       
@@ -465,17 +462,9 @@ export const UserService = {
         return; // Skip bill này
       } else {
         // Chưa có merchant transaction → đếm là pending (chờ upload file Excel)
-        if (report) {
-          // Bill đã có ReportRecord nhưng chưa có merchant transaction
-          if (report.reconciliationStatus === 'UNMATCHED') {
-            stats.pending++;
-          }
-        } else {
-          // Bill chưa có ReportRecord → chưa có merchant transaction
-          if (bill.status === 'PENDING') {
-            stats.pending++;
-          }
-        }
+        // Đếm TẤT CẢ bills chưa có merchants, không phụ thuộc vào status hoặc reconciliationStatus
+        // Vì mục đích là hiển thị bills đang chờ merchants file để đối soát
+        stats.pending++;
       }
     });
     
@@ -533,6 +522,7 @@ export const UserService = {
     
     // Filter: chỉ lấy bills CHƯA CÓ merchant transaction (chưa có mã chuẩn chi match với file Excel)
     // Bills có ERROR hoặc không khớp (nhưng đã có merchant data) KHÔNG được trả về đây
+    // Logic giống getPendingBillsSummary: trả về TẤT CẢ bills chưa có merchants, không phụ thuộc vào status
     let pendingBills = bills.filter(bill => {
       const report = reportsByBillId.get(bill.id);
       
@@ -541,14 +531,11 @@ export const UserService = {
       
       if (report) {
         // Bill đã có ReportRecord
-        // Kiểm tra xem có merchant data không
+        // Kiểm tra xem có merchant data không (merchantTransactionId là dấu hiệu rõ ràng nhất)
         hasMerchantTransaction = !!(
           report.merchantTransactionId || 
-          report.merchantAmount || 
-          report.merchantsFileData ||
-          report.merchantCode ||
-          report.merchantPointOfSaleName ||
-          report.merchantBranchName
+          (report.merchantAmount && report.merchantAmount > 0) ||
+          (report.merchantsFileData && Object.keys(report.merchantsFileData).length > 0)
         );
       }
       
@@ -565,14 +552,9 @@ export const UserService = {
         // Bills có ERROR hoặc không khớp sẽ hiển thị trong báo cáo, không cần trả về đây
         return false;
       } else {
-        // Chưa có merchant transaction → chỉ trả về nếu UNMATCHED hoặc PENDING
-        if (report) {
-          // Bill đã có ReportRecord nhưng chưa có merchant transaction
-          return report.reconciliationStatus === 'UNMATCHED';
-        } else {
-          // Bill chưa có ReportRecord → chưa có merchant transaction
-          return bill.status === 'PENDING';
-        }
+        // Chưa có merchant transaction → trả về TẤT CẢ bills (không phụ thuộc vào status)
+        // Vì mục đích là hiển thị bills đang chờ merchants file để đối soát
+        return true;
       }
     });
     
