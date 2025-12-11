@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileText, CreditCard, Settings, LogOut, X } from 'lucide-react';
+import { FileText, CreditCard, Settings, LogOut, X, Building2 } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useRealtimeData, FirebaseUtils } from '../../src/lib/firebaseHooks';
 import type { Agent } from '../../types';
@@ -26,6 +26,7 @@ const AgentSidebar: React.FC<AgentSidebarProps> = ({ activeTab, onLogout, isMobi
   const menuItems = [
     { id: 'report', label: 'Báo cáo', icon: FileText, path: '/agent/report' },
     { id: 'payment', label: 'Thanh Toán', icon: CreditCard, path: '/agent/payment' },
+    { id: 'adminPayment', label: 'Admin thanh toán cho đại lý', icon: Building2, path: '/agent/admin-payment' },
     { id: 'utilities', label: 'Tiện Ích', icon: Settings, path: '/agent/utilities' },
   ];
 

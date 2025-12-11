@@ -29,12 +29,13 @@ const Payouts: React.FC = () => {
   const [batchesDateFrom, setBatchesDateFrom] = useState<string>('');
   const [batchesDateTo, setBatchesDateTo] = useState<string>('');
   const [batchesSearchTerm, setBatchesSearchTerm] = useState<string>('');
-  const [batchesItemsPerPage, setBatchesItemsPerPage] = useState<number>(5);
+  const [batchesItemsPerPage, setBatchesItemsPerPage] = useState<number>(10);
   
   // Unpaid Bills State (matched report_records that haven't been paid by admin)
   const [unpaidReports, setUnpaidReports] = useState<ReportRecord[]>([]);
   const [selectedReports, setSelectedReports] = useState<string[]>([]);
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
+  const [expandedBatches, setExpandedBatches] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
   
@@ -53,7 +54,6 @@ const Payouts: React.FC = () => {
   // UI State
   const [loading, setLoading] = useState(true);
   const [isCreatingBatch, setIsCreatingBatch] = useState(false);
-  const [batchName, setBatchName] = useState('');
   const [showBatchModal, setShowBatchModal] = useState(false);
   const [copiedText, setCopiedText] = useState<string | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
@@ -137,14 +137,33 @@ const Payouts: React.FC = () => {
       const result = await ReportService.getReportRecords({}, { limit: 10000 });
       const paidReports = result.records.filter(r => r.adminPaymentStatus === 'PAID');
       
-      // Group theo ngày thanh toán (adminPaidAt date) - ĐƠN GIẢN, không dùng batch
-      const batchesByDate = new Map<string, ReportRecord[]>();
-      paidReports.forEach(report => {
-        const dateKey = report.adminPaidAt ? report.adminPaidAt.split('T')[0] : 'no-date';
-        if (!batchesByDate.has(dateKey)) {
-          batchesByDate.set(dateKey, []);
+      // Helper function to generate batch ID from payment date (HHmm_ddMMyyyy)
+      const generateBatchId = (paidAt: string): string => {
+        if (!paidAt) return '';
+        try {
+          const date = new Date(paidAt);
+          const hours = String(date.getHours()).padStart(2, '0');
+          const minutes = String(date.getMinutes()).padStart(2, '0');
+          const day = String(date.getDate()).padStart(2, '0');
+          const month = String(date.getMonth() + 1).padStart(2, '0');
+          const year = date.getFullYear();
+          return `${hours}${minutes}_${day}${month}${year}`;
+        } catch {
+          return '';
         }
-        batchesByDate.get(dateKey)!.push(report);
+      };
+
+      // Group theo batch ID (giờ + ngày/tháng/năm)
+      const batchesByTime = new Map<string, ReportRecord[]>();
+      paidReports.forEach(report => {
+        if (!report.adminPaidAt) return;
+        const batchId = generateBatchId(report.adminPaidAt);
+        if (!batchId) return;
+        
+        if (!batchesByTime.has(batchId)) {
+          batchesByTime.set(batchId, []);
+        }
+        batchesByTime.get(batchId)!.push(report);
       });
       
       // Convert to batch-like structure
@@ -159,9 +178,11 @@ const Payouts: React.FC = () => {
         paymentCount: number;
         agentCount: number;
         paymentStatus: 'PAID';
+        approvalCode?: string;
+        reports: ReportRecord[];
       }> = [];
       
-      batchesByDate.forEach((reports, dateKey) => {
+      batchesByTime.forEach((reports, batchId) => {
         const firstReport = reports[0];
         const totalAmount = reports.reduce((sum, r) => sum + (r.amount || 0), 0);
         const totalFees = reports.reduce((sum, r) => sum + (r.feeAmount || 0), 0);
@@ -169,7 +190,7 @@ const Payouts: React.FC = () => {
         const uniqueAgents = new Set(reports.map(r => r.agentId).filter(Boolean));
         
         batches.push({
-          id: dateKey,
+          id: batchId,
           name: `Đợt chi trả ${firstReport.adminPaidAt ? new Date(firstReport.adminPaidAt).toLocaleDateString('vi-VN') : 'Chưa xác định'}`,
           paidAt: firstReport.adminPaidAt,
           createdAt: firstReport.adminPaidAt || firstReport.createdAt,
@@ -178,7 +199,9 @@ const Payouts: React.FC = () => {
           netAmount,
           paymentCount: reports.length,
           agentCount: uniqueAgents.size,
-          paymentStatus: 'PAID' as const
+          paymentStatus: 'PAID' as const,
+          approvalCode: batchId,
+          reports
         });
       });
       
@@ -442,11 +465,6 @@ const Payouts: React.FC = () => {
       return;
     }
 
-    if (!batchName.trim()) {
-      alert('Vui lòng nhập tên đợt chi trả');
-      return;
-    }
-
     try {
       setIsCreatingBatch(true);
       
@@ -461,15 +479,32 @@ const Payouts: React.FC = () => {
         reportsByAgentMap[report.agentId].push(report);
       });
 
-      // ĐƠN GIẢN: Chỉ update adminPaymentStatus và adminPaidAt trong report_records
+      // Tính phí và update adminPaymentStatus, adminPaidAt, feeAmount trong report_records
       const updates: any = {};
       let totalReports = 0;
       
       selectedReportsList.forEach(report => {
         // Chỉ update nếu report.id là ID thật (không phải virtual)
         if (report.id && !report.id.startsWith('virtual_')) {
+          // Tính phí dựa trên agent's discount rates
+          const agent = agents.find(a => a.id === report.agentId);
+          let feePercentage = 0;
+          if (agent) {
+            const paymentMethod = report.paymentMethod;
+            const pointOfSaleName = report.pointOfSaleName;
+            if (agent.discountRatesByPointOfSale && pointOfSaleName && agent.discountRatesByPointOfSale[pointOfSaleName]) {
+              feePercentage = agent.discountRatesByPointOfSale[pointOfSaleName][paymentMethod] || 0;
+            } else if (agent.discountRates) {
+              feePercentage = agent.discountRates[paymentMethod] || 0;
+            }
+          }
+          const amount = report.merchantAmount || report.amount || 0;
+          const feeAmount = (amount * feePercentage) / 100;
+          
           updates[`report_records/${report.id}/adminPaymentStatus`] = 'PAID';
           updates[`report_records/${report.id}/adminPaidAt`] = FirebaseUtils.getServerTimestamp();
+          updates[`report_records/${report.id}/feeAmount`] = feeAmount;
+          updates[`report_records/${report.id}/netAmount`] = amount - feeAmount;
           totalReports++;
         }
       });
@@ -479,9 +514,8 @@ const Payouts: React.FC = () => {
         await update(ref(database), updates);
       }
 
-      alert(`Đã đánh dấu thanh toán "${batchName}" thành công cho ${totalReports} giao dịch!`);
+      alert(`Đã đánh dấu thanh toán thành công cho ${totalReports} giao dịch!`);
       setSelectedReports([]);
-      setBatchName('');
       setShowBatchModal(false);
       
       // Clear filters to show new batch
@@ -507,10 +541,7 @@ const Payouts: React.FC = () => {
       return;
     }
 
-    if (!batchName.trim()) {
-      alert('Vui lòng nhập tên đợt chi trả');
-      return;
-    }
+    // Không cần tên đợt chi trả nữa
 
     try {
       setIsCreatingBatch(true);
@@ -581,7 +612,7 @@ const Payouts: React.FC = () => {
 
       // Create batch
       await PaymentsService.createBatch({
-        name: batchName,
+        name: `Đợt chi trả ${new Date().toLocaleDateString('vi-VN')}`,
         totalAmount: payments.reduce((sum, p) => sum + p.totalAmount, 0),
         totalFees: payments.reduce((sum, p) => sum + p.feeAmount, 0),
         netAmount: payments.reduce((sum, p) => sum + p.netAmount, 0),
@@ -612,7 +643,6 @@ const Payouts: React.FC = () => {
 
       // Reset state
       setSelectedTransactions([]);
-      setBatchName('');
       setShowBatchModal(false);
       
       // Clear filters to show new batch
@@ -634,19 +664,36 @@ const Payouts: React.FC = () => {
     }
   };
 
-  // Revert payment - đổi status về UNPAID (ĐƠN GIẢN, không cần batch)
-  const handleRevertPayment = async (dateKey: string) => {
-    if (!window.confirm('Bạn có chắc chắn muốn đổi trạng thái thanh toán này về "Chưa thanh toán"? Tất cả giao dịch trong ngày này sẽ được chuyển về "Chưa thanh toán".')) {
+  // Helper function to generate batch ID from payment date (HHmm_ddMMyyyy)
+  const generateBatchId = (paidAt: string): string => {
+    if (!paidAt) return '';
+    try {
+      const date = new Date(paidAt);
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const year = date.getFullYear();
+      return `${hours}${minutes}_${day}${month}${year}`;
+    } catch {
+      return '';
+    }
+  };
+
+  // Revert payment - đổi status về UNPAID theo batch ID
+  const handleRevertPayment = async (batchId: string) => {
+    if (!window.confirm('Bạn có chắc chắn muốn đổi trạng thái thanh toán này về "Chưa thanh toán"? Tất cả giao dịch trong đợt này sẽ được chuyển về "Chưa thanh toán".')) {
       return;
     }
 
     try {
-      // Load tất cả reports đã thanh toán trong ngày này
+      // Load tất cả reports đã thanh toán
       const result = await ReportService.getReportRecords({}, { limit: 10000 });
       const reportsToRevert = result.records.filter(r => {
         if (r.adminPaymentStatus !== 'PAID' || !r.adminPaidAt) return false;
-        const paidDate = r.adminPaidAt.split('T')[0];
-        return paidDate === dateKey;
+        // Tạo batch ID từ adminPaidAt và so sánh với batchId được truyền vào
+        const reportBatchId = generateBatchId(r.adminPaidAt);
+        return reportBatchId === batchId;
       });
 
       // Update status về UNPAID
@@ -993,15 +1040,19 @@ const Payouts: React.FC = () => {
                                 <p className="text-sm text-slate-500">Mã: {agent?.code || agentId}</p>
                               </div>
                             </div>
-                            <div className="text-right mr-4">
-                              <p className="text-sm text-slate-500">Tổng tiền</p>
-                              <p className="text-lg font-bold text-slate-900">
-                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totals.totalAmount)}
-                              </p>
-                              <p className="text-xs text-slate-500">
-                                Phí: {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totals.feeAmount)} | 
-                                Thực trả: {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totals.netAmount)}
-                              </p>
+                            <div className="text-right mr-4 space-y-1">
+                              <div>
+                                <p className="text-xs text-slate-500">Tổng tiền</p>
+                                <p className="text-lg font-bold text-slate-900">
+                                  {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totals.totalAmount)}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-slate-500">Phí</p>
+                                <p className="text-sm font-medium text-slate-600">
+                                  {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totals.feeAmount)}
+                                </p>
+                              </div>
                             </div>
                             <button
                               onClick={() => {
@@ -1033,24 +1084,48 @@ const Payouts: React.FC = () => {
                                     <th className="px-3 py-2 text-left">Mã GD</th>
                                     <th className="px-3 py-2 text-left">Ngày GD</th>
                                     <th className="px-3 py-2 text-right">Số tiền</th>
+                                    <th className="px-3 py-2 text-right">Phí</th>
                                     <th className="px-3 py-2 text-left">Phương thức</th>
                                     <th className="px-3 py-2 text-left">Điểm thu</th>
                                   </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100">
-                                  {group.reports.map((report) => (
-                                    <tr key={report.id} className="hover:bg-slate-50">
-                                      <td className="px-3 py-2 font-mono text-xs">{report.transactionCode}</td>
-                                      <td className="px-3 py-2">
-                                        {new Date(report.transactionDate).toLocaleDateString('vi-VN')}
-                                      </td>
-                                      <td className="px-3 py-2 text-right font-medium">
-                                        {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(report.amount)}
-                                      </td>
-                                      <td className="px-3 py-2">{report.paymentMethod}</td>
-                                      <td className="px-3 py-2 font-mono text-xs">{report.pointOfSaleName || '-'}</td>
-                                    </tr>
-                                  ))}
+                                  {group.reports.map((report) => {
+                                    // Calculate fee for this report
+                                    const agent = group.agent;
+                                    const paymentMethod = report.paymentMethod;
+                                    const pointOfSaleName = report.pointOfSaleName;
+                                    
+                                    let feePercentage = 0;
+                                    if (agent?.discountRatesByPointOfSale && pointOfSaleName && agent.discountRatesByPointOfSale[pointOfSaleName]) {
+                                      feePercentage = agent.discountRatesByPointOfSale[pointOfSaleName][paymentMethod] || 0;
+                                    } else if (agent?.discountRates) {
+                                      feePercentage = agent.discountRates[paymentMethod] || 0;
+                                    }
+                                    
+                                    const feeAmount = (report.amount * feePercentage) / 100;
+                                    
+                                    return (
+                                      <tr key={report.id} className="hover:bg-slate-50">
+                                        <td className="px-3 py-2 font-mono text-xs">{report.transactionCode}</td>
+                                        <td className="px-3 py-2">
+                                          {new Date(report.transactionDate).toLocaleDateString('vi-VN')}
+                                        </td>
+                                        <td className="px-3 py-2 text-right font-medium">
+                                          {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(report.amount)}
+                                        </td>
+                                        <td className="px-3 py-2 text-right">
+                                          {feeAmount > 0 ? (
+                                            new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(feeAmount)
+                                          ) : (
+                                            <span className="text-slate-400">-</span>
+                                          )}
+                                        </td>
+                                        <td className="px-3 py-2">{report.paymentMethod}</td>
+                                        <td className="px-3 py-2 font-mono text-xs">{report.pointOfSaleName || '-'}</td>
+                                      </tr>
+                                    );
+                                  })}
                                 </tbody>
                               </table>
                             </div>
@@ -1115,7 +1190,6 @@ const Payouts: React.FC = () => {
                       <th className="p-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Số GD</th>
                       <th className="p-4 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Tổng tiền</th>
                       <th className="p-4 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Phí</th>
-                      <th className="p-4 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Thực nhận</th>
                       <th className="p-4 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">Thao tác</th>
                     </tr>
                   </thead>
@@ -1164,7 +1238,6 @@ const Payouts: React.FC = () => {
                           <td className="p-4 text-slate-700">{group.transactions.length}</td>
                           <td className="p-4 text-right font-medium text-slate-800">{group.totalAmount.toLocaleString('vi-VN')} đ</td>
                           <td className="p-4 text-right font-medium text-red-600">-{group.feeAmount.toLocaleString('vi-VN')} đ</td>
-                          <td className="p-4 text-right font-bold text-emerald-700">{group.netAmount.toLocaleString('vi-VN')} đ</td>
                           <td className="p-4 text-center">
                             <button
                               onClick={() => setSelectedGroup(agentId)}
@@ -1220,8 +1293,6 @@ const Payouts: React.FC = () => {
                             <div className="text-xl font-bold text-red-600">-{group.feeAmount.toLocaleString('vi-VN')} đ</div>
                   </div>
                           <div className="bg-emerald-50 rounded-lg p-4">
-                            <div className="text-sm text-slate-500 mb-1">Thực nhận</div>
-                            <div className="text-xl font-bold text-emerald-700">{group.netAmount.toLocaleString('vi-VN')} đ</div>
                   </div>
                 </div>
 
@@ -1291,7 +1362,8 @@ const Payouts: React.FC = () => {
                                 <div className="pt-2 border-t border-blue-200">
                                   <button
                                     onClick={() => {
-                                      const allInfo = `STK: ${agent.bankAccount}\nTên: ${agent.name}\nSố tiền: ${group.netAmount.toLocaleString('vi-VN')} VNĐ${agent.bankBranch ? `\nChi nhánh: ${agent.bankBranch}` : ''}${agent.contactPhone ? `\nSĐT: ${agent.contactPhone}` : ''}`;
+                                      const totalAmount = group.transactions.reduce((sum, tx) => sum + (tx.merchantData?.amount || 0), 0);
+                                      const allInfo = `STK: ${agent.bankAccount}\nTên: ${agent.name}\nSố tiền: ${totalAmount.toLocaleString('vi-VN')} VNĐ${agent.bankBranch ? `\nChi nhánh: ${agent.bankBranch}` : ''}${agent.contactPhone ? `\nSĐT: ${agent.contactPhone}` : ''}`;
                                       copyToClipboard(allInfo, `All-${agentId}`);
                                     }}
                                     className="w-full bg-blue-600 text-white text-sm font-medium py-2 px-4 rounded hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2"
@@ -1372,73 +1444,150 @@ const Payouts: React.FC = () => {
             </div>
           ) : (
             <>
-              {paymentBatches.map((batch) => (
-                <div key={batch.id} className="bg-white border border-slate-200 rounded-xl p-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-lg font-semibold text-slate-800">{batch.name}</h3>
-                    <p className="text-sm text-slate-500">
-                      {batch.paidAt 
-                        ? `Thanh toán: ${new Date(batch.paidAt).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`
-                        : `Tạo: ${new Date(batch.createdAt).toLocaleDateString('vi-VN')}`
-                      } • 
-                      {batch.agentCount} đại lý • {batch.paymentCount} thanh toán
-                      {batch.approvalCode && (
-                        <span className="ml-2 text-xs font-mono text-slate-400">({batch.approvalCode})</span>
-                      )}
-                    </p>
-                  </div>
-                  
-                  <div className="flex items-center space-x-3">
-                    <div className="text-right">
-                      <div className="text-lg font-bold text-slate-800">
-                        {batch.netAmount.toLocaleString('vi-VN')} VNĐ
-                      </div>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className={`text-xs px-2 py-1 rounded-full ${
-                          batch.status === 'COMPLETED' ? 'bg-emerald-100 text-emerald-700' :
-                          batch.status === 'EXPORTED' ? 'bg-blue-100 text-blue-700' : 'bg-yellow-100 text-yellow-700'
-                        }`}>
-                          {batch.status === 'COMPLETED' ? 'Hoàn thành' :
-                           batch.status === 'EXPORTED' ? 'Đã xuất' : 'Nháp'}
-                        </span>
-                        {batch.paymentStatus && (
-                          <span className={`text-xs px-2 py-1 rounded-full ${
-                            batch.paymentStatus === 'PAID' ? 'bg-green-100 text-green-700' :
-                            batch.paymentStatus === 'UNPAID' ? 'bg-red-100 text-red-700' :
-                            batch.paymentStatus === 'PARTIAL' ? 'bg-yellow-100 text-yellow-700' :
-                            'bg-slate-100 text-slate-700'
-                          }`}>
-                            {batch.paymentStatus === 'PAID' ? 'Đã thanh toán' :
-                             batch.paymentStatus === 'UNPAID' ? 'Chưa thanh toán' :
-                             batch.paymentStatus === 'PARTIAL' ? 'Thanh toán một phần' :
-                             'Đã hủy'}
-                          </span>
-                        )}
+              {paymentBatches.map((batch) => {
+                const isExpanded = expandedBatches.has(batch.id);
+                
+                // Format batch ID for display (HHmm_ddMMyyyy -> HH:mm dd/MM/yyyy)
+                const formatBatchId = (batchId: string): string => {
+                  if (!batchId || !batchId.includes('_')) return batchId;
+                  const [time, date] = batchId.split('_');
+                  if (time.length === 4 && date.length === 8) {
+                    const hours = time.substring(0, 2);
+                    const minutes = time.substring(2, 4);
+                    const day = date.substring(0, 2);
+                    const month = date.substring(2, 4);
+                    const year = date.substring(4, 8);
+                    return `${hours}:${minutes} ${day}/${month}/${year}`;
+                  }
+                  return batchId;
+                };
+                
+                return (
+                  <div key={batch.id} className="border border-slate-200 rounded-lg overflow-hidden">
+                    <div className="bg-indigo-50 p-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <h4 className="font-semibold text-slate-900">Mã chi trả: {batch.approvalCode || batch.id}</h4>
+                          <p className="text-sm text-slate-600 mt-1">
+                            {batch.paidAt 
+                              ? `Thanh toán: ${new Date(batch.paidAt).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+                              : `Tạo: ${new Date(batch.createdAt).toLocaleDateString('vi-VN')}`
+                            }
+                          </p>
+                          <p className="text-xs text-slate-500 mt-1">
+                            {formatBatchId(batch.id)} • {batch.agentCount} đại lý • {batch.paymentCount} thanh toán
+                          </p>
+                        </div>
+                        <div className="text-right mr-4 space-y-1">
+                          <div>
+                            <p className="text-xs text-slate-500">Tổng tiền</p>
+                            <p className="text-lg font-bold text-slate-900">{batch.totalAmount.toLocaleString('vi-VN')} ₫</p>
+                          </div>
+                          {batch.totalFees > 0 && (
+                            <div>
+                              <p className="text-xs text-slate-500">Tổng phí</p>
+                              <p className="text-sm font-medium text-slate-600">{batch.totalFees.toLocaleString('vi-VN')} ₫</p>
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex flex-col items-end space-y-2">
+                          <div className="flex items-center gap-2">
+                            {batch.paymentStatus && (
+                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                batch.paymentStatus === 'PAID' ? 'bg-green-100 text-green-800' :
+                                batch.paymentStatus === 'UNPAID' ? 'bg-red-100 text-red-800' :
+                                batch.paymentStatus === 'PARTIAL' ? 'bg-yellow-100 text-yellow-800' :
+                                'bg-slate-100 text-slate-800'
+                              }`}>
+                                {batch.paymentStatus === 'PAID' ? 'Đã thanh toán' :
+                                 batch.paymentStatus === 'UNPAID' ? 'Chưa thanh toán' :
+                                 batch.paymentStatus === 'PARTIAL' ? 'Thanh toán một phần' :
+                                 'Đã hủy'}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            {batch.paymentStatus === 'PAID' && (
+                              <button
+                                onClick={() => handleRevertPayment(batch.id)}
+                                className="px-3 py-1.5 bg-yellow-100 text-yellow-700 rounded-lg hover:bg-yellow-200 transition-colors text-xs font-medium"
+                              >
+                                Revert
+                              </button>
+                            )}
+                            <button
+                              onClick={() => handleDeletePayment(batch.id)}
+                              className="px-3 py-1.5 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors text-xs font-medium flex items-center space-x-1"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                              <span>Xóa</span>
+                            </button>
+                            <button
+                              onClick={() => {
+                                const newExpanded = new Set(expandedBatches);
+                                if (isExpanded) {
+                                  newExpanded.delete(batch.id);
+                                } else {
+                                  newExpanded.add(batch.id);
+                                }
+                                setExpandedBatches(newExpanded);
+                              }}
+                              className="p-2 hover:bg-indigo-100 rounded-lg transition-colors"
+                            >
+                              {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </div>
                     
-                    <div className="flex items-center space-x-2">
-                      {batch.paymentStatus === 'PAID' && (
-                    <button
-                          onClick={() => handleRevertPayment(batch.id)}
-                          className="flex items-center space-x-2 px-3 py-2 bg-yellow-100 text-yellow-700 rounded-lg hover:bg-yellow-200 transition-colors"
-                        >
-                          <span>Revert</span>
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleDeletePayment(batch.id)}
-                      className="flex items-center space-x-2 px-3 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                      <span>Xóa</span>
-                    </button>
-                    </div>
+                    {isExpanded && batch.reports && (
+                      <div className="p-4 bg-white border-t border-slate-200">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead className="bg-slate-50">
+                              <tr>
+                                <th className="px-3 py-2 text-left">Đại lý</th>
+                                <th className="px-3 py-2 text-left">Mã GD</th>
+                                <th className="px-3 py-2 text-left">Ngày GD</th>
+                                <th className="px-3 py-2 text-right">Số tiền (Bill)</th>
+                                <th className="px-3 py-2 text-right">Số tiền (Merchants)</th>
+                                <th className="px-3 py-2 text-right">Phí</th>
+                                <th className="px-3 py-2 text-left">Loại</th>
+                                <th className="px-3 py-2 text-left">Điểm thu</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {batch.reports.map((report) => {
+                                const agent = agents.find(a => a.id === report.agentId);
+                                return (
+                                  <tr key={report.id} className="hover:bg-slate-50">
+                                    <td className="px-3 py-2">
+                                      <div>
+                                        <div className="font-medium">{agent?.name || report.agentId}</div>
+                                        {agent?.code && (
+                                          <div className="text-xs text-slate-500">{agent.code}</div>
+                                        )}
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-2 font-mono text-xs">{report.transactionCode}</td>
+                                    <td className="px-3 py-2">{new Date(report.transactionDate || report.createdAt).toLocaleDateString('vi-VN')}</td>
+                                    <td className="px-3 py-2 text-right font-medium">{report.amount ? report.amount.toLocaleString('vi-VN') + ' ₫' : '-'}</td>
+                                    <td className="px-3 py-2 text-right font-medium text-green-600">{report.merchantAmount ? report.merchantAmount.toLocaleString('vi-VN') + ' ₫' : '-'}</td>
+                                    <td className="px-3 py-2 text-right">{report.feeAmount ? report.feeAmount.toLocaleString('vi-VN') + ' ₫' : '-'}</td>
+                                    <td className="px-3 py-2">{report.paymentMethod}</td>
+                                    <td className="px-3 py-2 font-mono text-xs">{report.pointOfSaleName || '-'}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
-              </div>
-              ))}
+                );
+              })}
               
               {/* Pagination for batches */}
               {batchesTotal > batchesItemsPerPage && (
@@ -1469,19 +1618,6 @@ const Payouts: React.FC = () => {
             <h3 className="text-lg font-semibold text-slate-800 mb-4">Tạo đợt chi trả mới</h3>
             
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">
-                  Tên đợt chi trả
-                </label>
-                <input
-                  type="text"
-                  value={batchName}
-                  onChange={(e) => setBatchName(e.target.value)}
-                  placeholder="VD: Chi trả tháng 11/2024"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
-                />
-              </div>
-              
               {/* QR Code của đại lý */}
               {(() => {
                 // Lấy agent đầu tiên từ selected reports để hiển thị QR
@@ -1571,7 +1707,6 @@ const Payouts: React.FC = () => {
               <button
                 onClick={() => {
                   setShowBatchModal(false);
-                  setBatchName('');
                 }}
                 className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors"
               >
@@ -1585,10 +1720,10 @@ const Payouts: React.FC = () => {
                     handleCreateBatch();
                   }
                 }}
-                disabled={isCreatingBatch || !batchName.trim() || (selectedReports.length === 0 && selectedTransactions.length === 0)}
+                disabled={isCreatingBatch || (selectedReports.length === 0 && selectedTransactions.length === 0)}
                 className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isCreatingBatch ? 'Đang tạo...' : 'Tạo đợt'}
+                {isCreatingBatch ? 'Đang chi trả...' : 'Chi trả'}
               </button>
             </div>
           </div>

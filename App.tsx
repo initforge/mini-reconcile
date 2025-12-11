@@ -29,6 +29,7 @@ import AgentLayout from './components/agent/AgentLayout';
 import AgentReport from './components/agent/AgentReport';
 import AgentReconciliationDetail from './components/agent/AgentReconciliationDetail';
 import AgentPayments from './components/agent/AgentPayments';
+import AgentAdminPayments from './components/agent/AgentAdminPayments';
 import AgentUtilities from './components/agent/AgentUtilities';
 // import { useAuth } from './src/lib/firebaseHooks'; // Disabled for mock auth
 
@@ -275,7 +276,7 @@ function App() {
           }
         >
           <Route path="upbill" element={<UploadBill />} />
-          <Route path="history" element={<BillHistory />} />
+          <Route path="history" element={<Navigate to="/user/upbill" replace />} />
           <Route path="report" element={<UserReport />} />
           <Route path="payment" element={<PaymentStatus />} />
           <Route path="utilities" element={<UserUtilities />} />
@@ -295,6 +296,7 @@ function App() {
           <Route path="report" element={<AgentReport />} />
           <Route path="reconciliation/:sessionId" element={<AgentReconciliationDetail />} />
           <Route path="payment" element={<AgentPayments />} />
+          <Route path="admin-payment" element={<AgentAdminPayments />} />
           <Route path="utilities" element={<AgentUtilities />} />
           <Route index element={<Navigate to="/agent/report" replace />} />
         </Route>

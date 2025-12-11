@@ -22,6 +22,7 @@ const UserReport: React.FC = () => {
   const [dateFilterActive, setDateFilterActive] = useState(false);
   const [statusFilter, setStatusFilter] = useState<ReportStatus | 'all'>('all');
   const [selectedPointOfSaleName, setSelectedPointOfSaleName] = useState<string>('all');
+  const [searchTerm, setSearchTerm] = useState<string>(''); // Search by transaction code
   
   // Data state
   const [records, setRecords] = useState<ReportRecord[]>([]);
@@ -66,7 +67,7 @@ const UserReport: React.FC = () => {
   useEffect(() => {
     if (!userId) return;
     loadReports();
-  }, [userId, dateFrom, dateTo, statusFilter, selectedPointOfSaleName, currentPage]);
+  }, [userId, dateFrom, dateTo, statusFilter, selectedPointOfSaleName, searchTerm, currentPage]);
 
   const loadReports = async () => {
     if (!userId) return;
@@ -91,16 +92,25 @@ const UserReport: React.FC = () => {
       
       console.log(`📊 [UserReport] Loaded ${result.records.length} records for userId: ${userId}`);
       
-      // Filter: CHỈ hiển thị records có userId match
+      // CHỈ hiển thị records đã có file merchants khớp (có merchantTransactionId)
+      // Bills chưa có merchants KHÔNG được hiển thị trong báo cáo
       let filteredRecords = result.records.filter(r => {
-        // Loại bỏ records không có transactionCode hoặc amount hợp lệ
+        // PHẢI có merchantTransactionId (đã có file merchants)
+        if (!r.merchantTransactionId) {
+          return false;
+        }
+        
+        // Phải có transactionCode hợp lệ
         if (!r.transactionCode || r.transactionCode.trim() === '') return false;
-        if (!r.amount || isNaN(r.amount) || !isFinite(r.amount) || r.amount <= 0) return false;
         
         // QUAN TRỌNG: Filter theo userId
         if (r.userId && r.userId !== userId) return false;
         
-        return true;
+        // Phải có ít nhất một giá trị amount hợp lệ (> 0)
+        const hasValidAmount = (r.merchantAmount && !isNaN(r.merchantAmount) && r.merchantAmount > 0) || 
+                               (r.amount && !isNaN(r.amount) && r.amount > 0);
+        
+        return hasValidAmount;
       });
       
       console.log(`📊 [UserReport] After filtering: ${filteredRecords.length} records`);
@@ -121,6 +131,15 @@ const UserReport: React.FC = () => {
           } catch (error) {
             return true;
           }
+        });
+      }
+      
+      // Apply search term filter (transaction code)
+      if (searchTerm && searchTerm.trim()) {
+        const searchLower = searchTerm.toLowerCase().trim();
+        filteredRecords = filteredRecords.filter(r => {
+          const code = r.transactionCode ? String(r.transactionCode).toLowerCase() : '';
+          return code.includes(searchLower);
         });
       }
       
@@ -153,11 +172,13 @@ const UserReport: React.FC = () => {
     agentId?: string;
     userId?: string;
     pointOfSaleName?: string;
+    searchTerm?: string;
   }) => {
     setDateFrom(newFilters.dateFrom);
     setDateTo(newFilters.dateTo);
     setStatusFilter(newFilters.status);
     setSelectedPointOfSaleName(newFilters.pointOfSaleName || 'all');
+    setSearchTerm(newFilters.searchTerm || '');
     setCurrentPage(1);
   };
 
@@ -171,7 +192,8 @@ const UserReport: React.FC = () => {
           dateFrom,
           dateTo,
           status: statusFilter,
-          pointOfSaleName: selectedPointOfSaleName !== 'all' ? selectedPointOfSaleName : undefined
+          pointOfSaleName: selectedPointOfSaleName !== 'all' ? selectedPointOfSaleName : undefined,
+          searchTerm
         }}
         pointOfSales={availablePointOfSales}
         onChange={handleFilterChange}

@@ -93,10 +93,11 @@ const AgentPayments: React.FC = () => {
   // Tab 2: Đợt chi trả
   const [paymentBatches, setPaymentBatches] = useState<AgentPaymentToUser[]>([]);
   const [batchesPage, setBatchesPage] = useState(1);
-  const [batchesItemsPerPage, setBatchesItemsPerPage] = useState<number>(5);
+  const [batchesItemsPerPage, setBatchesItemsPerPage] = useState<number>(10);
   const [batchesDateFrom, setBatchesDateFrom] = useState<string>('');
   const [batchesDateTo, setBatchesDateTo] = useState<string>('');
   const [batchesSearchTerm, setBatchesSearchTerm] = useState<string>('');
+  const [expandedBatches, setExpandedBatches] = useState<Set<string>>(new Set());
 
   const [note, setNote] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -262,7 +263,23 @@ const AgentPayments: React.FC = () => {
     loadUnpaidBills();
   }, [agentId, agentCode, billsData, reportRecordsFromDB]);
 
-  // Load paid bills (for "Đợt chi trả" tab) - ĐƠN GIẢN HÓA: Query từ user_bills
+  // Helper function to generate batch ID from payment date (HHmm_ddMMyyyy)
+  const generateBatchId = (paidAt: string): string => {
+    if (!paidAt) return '';
+    try {
+      const date = new Date(paidAt);
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const year = date.getFullYear();
+      return `${hours}${minutes}_${day}${month}${year}`;
+    } catch {
+      return '';
+    }
+  };
+
+  // Load paid bills (for "Đợt chi trả" tab) - Group by batch ID (giờ + ngày/tháng/năm)
   useEffect(() => {
     const loadBatches = () => {
       if (!agentId) return;
@@ -272,27 +289,46 @@ const AgentPayments: React.FC = () => {
         bill.agentId === agentId && bill.agentPaymentStatus === 'PAID'
       );
       
-      // Group by agentPaidAt date (có thể group theo ngày hoặc để trống)
-      // Sort by agentPaidAt descending
-      agentBills.sort((a, b) => {
-        const dateA = new Date(a.agentPaidAt || 0).getTime();
-        const dateB = new Date(b.agentPaidAt || 0).getTime();
-        return dateB - dateA;
+      // Group by batch ID (giờ + ngày/tháng/năm)
+      const batchesByTime: Record<string, UserBill[]> = {};
+      agentBills.forEach((bill: UserBill) => {
+        if (!bill.agentPaidAt) return;
+        const batchId = generateBatchId(bill.agentPaidAt);
+        if (!batchesByTime[batchId]) {
+          batchesByTime[batchId] = [];
+        }
+        batchesByTime[batchId].push(bill);
       });
       
-      // Convert to AgentPaymentToUser format để tương thích với UI hiện tại (tạm thời)
-      // TODO: Refactor UI để không cần format này
-      const batches: AgentPaymentToUser[] = agentBills.map((bill: UserBill) => ({
-        id: bill.id,
-        agentId: bill.agentId,
-        userId: bill.userId,
-        billIds: [bill.id],
-        totalAmount: bill.amount,
-        status: 'PAID' as AgentPaymentStatus,
-        note: bill.agentPaidNote || '',
-        createdAt: bill.agentPaidAt || bill.createdAt,
-        paidAt: bill.agentPaidAt
-      }));
+      // Convert to AgentPaymentToUser format, grouped by batch
+      const batches: AgentPaymentToUser[] = Object.entries(batchesByTime).map(([batchId, bills]) => {
+        const firstBill = bills[0];
+        const totalAmount = bills.reduce((sum, b) => sum + (b.amount || 0), 0);
+        const totalFee = 0; // Fee calculation would need to be added if needed
+        const netAmount = totalAmount - totalFee;
+        
+        return {
+          id: batchId, // Use batch ID as the ID
+          agentId: firstBill.agentId,
+          userId: firstBill.userId, // For single-user batches, or could be 'multiple'
+          billIds: bills.map(b => b.id),
+          totalAmount,
+          feeAmount: totalFee,
+          netAmount,
+          status: 'PAID' as AgentPaymentStatus,
+          note: firstBill.agentPaidNote || '',
+          createdAt: firstBill.agentPaidAt || firstBill.createdAt,
+          paidAt: firstBill.agentPaidAt,
+          approvalCode: batchId // Use batch ID as approval code
+        };
+      });
+      
+      // Sort by paidAt descending
+      batches.sort((a, b) => {
+        const dateA = new Date(a.paidAt || 0).getTime();
+        const dateB = new Date(b.paidAt || 0).getTime();
+        return dateB - dateA;
+      });
       
       setPaymentBatches(batches);
     };
@@ -964,91 +1000,181 @@ const AgentPayments: React.FC = () => {
                 </div>
               </div>
 
-              {/* Batches Table */}
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-slate-50">
-                    <tr>
-                      <th className="px-4 py-3 text-left">Mã chuẩn chi</th>
-                      <th className="px-4 py-3 text-left">Ngày tạo</th>
-                      <th className="px-4 py-3 text-left">Ngày thanh toán</th>
-                      <th className="px-4 py-3 text-right">Số bill</th>
-                      <th className="px-4 py-3 text-right">Tổng tiền</th>
-                      <th className="px-4 py-3 text-right">Tổng phí</th>
-                      <th className="px-4 py-3 text-right">Thực trả</th>
-                      <th className="px-4 py-3 text-left">Trạng thái</th>
-                      <th className="px-4 py-3 text-left">Thao tác</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {paginatedBatches.map((batch) => {
-                      // Get transaction codes from bills in the batch
-                      const allBills = FirebaseUtils.objectToArray(billsData || {});
-                      const batchBills = allBills.filter((bill: UserBill) => 
-                        batch.billIds?.includes(bill.id)
-                      );
-                      // Use first bill's transactionCode as display, or show multiple if different
-                      const transactionCodes = batchBills.map((bill: UserBill) => bill.transactionCode).filter(Boolean);
-                      const displayCode = transactionCodes.length > 0 
-                        ? (transactionCodes.length === 1 ? transactionCodes[0] : `${transactionCodes[0]} (+${transactionCodes.length - 1})`)
-                        : (batch.approvalCode || batch.id);
-                      
-                      return (
-                      <tr key={batch.id} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 font-mono text-xs">{displayCode}</td>
-                        <td className="px-4 py-3">{formatDate(batch.createdAt || '')}</td>
-                        <td className="px-4 py-3">{batch.paidAt ? formatDate(batch.paidAt) : '-'}</td>
-                        <td className="px-4 py-3 text-right">{batch.billIds?.length || 0}</td>
-                        <td className="px-4 py-3 text-right font-medium">{formatAmount(batch.totalAmount)}</td>
-                        <td className="px-4 py-3 text-right">{formatAmount(batch.feeAmount || 0)}</td>
-                        <td className="px-4 py-3 text-right font-bold text-green-600">{formatAmount(batch.netAmount || batch.totalAmount)}</td>
-                        <td className="px-4 py-3">
-                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                            batch.status === 'PAID'
-                              ? 'bg-green-100 text-green-800'
-                              : 'bg-slate-100 text-slate-800'
-                          }`}>
-                            {batch.status === 'PAID' ? 'Đã thanh toán' : 'Chưa thanh toán'}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          {batch.status === 'PAID' ? (
-                            <button
-                              onClick={async () => {
-                                if (window.confirm('Bạn có chắc chắn muốn đổi trạng thái từ "Đã thanh toán" về "Chưa thanh toán"?')) {
-                                  try {
-                                    // ĐƠN GIẢN HÓA: Chỉ update user_bills với agentPaymentStatus = 'UNPAID'
-                                    const updates: any = {};
-                                    if (batch.billIds) {
-                                      batch.billIds.forEach((billId: string) => {
-                                        updates[`user_bills/${billId}/agentPaymentStatus`] = 'UNPAID';
-                                        updates[`user_bills/${billId}/agentPaidAt`] = null;
-                                        updates[`user_bills/${billId}/agentPaidNote`] = null;
-                                      });
+              {/* Batches Cards */}
+              <div className="space-y-4">
+                {paginatedBatches.map((batch) => {
+                  const allBills = FirebaseUtils.objectToArray(billsData || {});
+                  const batchBills = allBills.filter((bill: UserBill) => 
+                    batch.billIds?.includes(bill.id)
+                  );
+                  const isExpanded = expandedBatches.has(batch.id);
+                  
+                  // Get ReportRecords for these bills to get merchantAmount
+                  const batchReports = reportRecordsFromDB.filter((report: ReportRecord) =>
+                    batchBills.some((bill: UserBill) => bill.id === report.userBillId)
+                  );
+                  
+                  // Calculate totals including merchantAmount
+                  const totalMerchantAmount = batchReports.reduce((sum, report) => 
+                    sum + (report.merchantAmount || 0), 0
+                  );
+                  
+                  // Format batch ID for display (HHmm_ddMMyyyy -> HH:mm dd/MM/yyyy)
+                  const formatBatchId = (batchId: string): string => {
+                    if (!batchId || !batchId.includes('_')) return batchId;
+                    const [time, date] = batchId.split('_');
+                    if (time.length === 4 && date.length === 8) {
+                      const hours = time.substring(0, 2);
+                      const minutes = time.substring(2, 4);
+                      const day = date.substring(0, 2);
+                      const month = date.substring(2, 4);
+                      const year = date.substring(4, 8);
+                      return `${hours}:${minutes} ${day}/${month}/${year}`;
+                    }
+                    return batchId;
+                  };
+                  
+                  return (
+                    <div key={batch.id} className="border border-slate-200 rounded-lg overflow-hidden">
+                      <div className="bg-green-50 p-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1">
+                            <h4 className="font-semibold text-slate-900">Mã chi trả: {batch.approvalCode || batch.id}</h4>
+                            <p className="text-sm text-slate-600 mt-1">
+                              {batch.paidAt ? formatDate(batch.paidAt) : formatDate(batch.createdAt || '')}
+                            </p>
+                            <p className="text-xs text-slate-500 mt-1">
+                              {formatBatchId(batch.id)} • {batch.billIds?.length || 0} giao dịch
+                            </p>
+                          </div>
+                          <div className="text-right mr-4 space-y-1">
+                            <div>
+                              <p className="text-xs text-slate-500">Tổng tiền</p>
+                              <p className="text-lg font-bold text-slate-900">{formatAmount(batch.totalAmount)}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-slate-500">Tiền từ file merchants</p>
+                              <p className="text-sm font-medium text-indigo-600">
+                                {totalMerchantAmount > 0 ? formatAmount(totalMerchantAmount) : 'Chưa có file merchants'}
+                              </p>
+                            </div>
+                            {batch.feeAmount && batch.feeAmount > 0 ? (
+                              <div>
+                                <p className="text-xs text-slate-500">Tổng phí</p>
+                                <p className="text-sm font-medium text-slate-600">{formatAmount(batch.feeAmount)}</p>
+                              </div>
+                            ) : null}
+                          </div>
+                          <div className="flex flex-col items-end space-y-2">
+                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                              batch.status === 'PAID'
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-slate-100 text-slate-800'
+                            }`}>
+                              {batch.status === 'PAID' ? 'Đã thanh toán' : 'Chưa thanh toán'}
+                            </span>
+                            <div className="flex items-center space-x-2">
+                              {batch.status === 'PAID' && (
+                                <button
+                                  onClick={async () => {
+                                    if (window.confirm('Bạn có chắc chắn muốn đổi trạng thái từ "Đã thanh toán" về "Chưa thanh toán"? Toàn bộ đợt chi trả này sẽ được chuyển về tab "Chưa thanh toán".')) {
+                                      try {
+                                        const updates: any = {};
+                                        if (batch.billIds) {
+                                          batch.billIds.forEach((billId: string) => {
+                                            updates[`user_bills/${billId}/agentPaymentStatus`] = 'UNPAID';
+                                            updates[`user_bills/${billId}/agentPaidAt`] = null;
+                                            updates[`user_bills/${billId}/agentPaidNote`] = null;
+                                          });
+                                        }
+                                        await update(ref(database), updates);
+                                        alert('Đã đổi trạng thái thành công! Đợt chi trả đã được chuyển về tab "Chưa thanh toán".');
+                                      } catch (error) {
+                                        console.error('Error reverting payment status:', error);
+                                        alert('Có lỗi khi đổi trạng thái. Vui lòng thử lại.');
+                                      }
                                     }
-                                    
-                                    await update(ref(database), updates);
-                                    // Reload unpaid reports to show reverted bills in "Chưa thanh toán" tab
-                                    // Note: paymentBatches will automatically update via realtime listener
-                                    // and the batch will disappear from "Đợt chi trả" tab because we filter by status === 'PAID'
-                                    alert('Đã đổi trạng thái thành công! Batch đã được chuyển về tab "Chưa thanh toán".');
-                                  } catch (error) {
-                                    console.error('Error reverting payment status:', error);
-                                    alert('Có lỗi khi đổi trạng thái. Vui lòng thử lại.');
+                                  }}
+                                  className="px-3 py-1.5 bg-yellow-100 text-yellow-700 rounded-lg hover:bg-yellow-200 transition-colors text-xs font-medium"
+                                >
+                                  Revert
+                                </button>
+                              )}
+                              <button
+                                onClick={() => {
+                                  const newExpanded = new Set(expandedBatches);
+                                  if (isExpanded) {
+                                    newExpanded.delete(batch.id);
+                                  } else {
+                                    newExpanded.add(batch.id);
                                   }
-                                }
-                              }}
-                              className="px-3 py-1.5 bg-yellow-100 text-yellow-700 rounded-lg hover:bg-yellow-200 transition-colors text-xs font-medium"
-                            >
-                              Revert
-                            </button>
-                          ) : null}
-                        </td>
-                      </tr>
-                    );
-                    })}
-                  </tbody>
-                </table>
+                                  setExpandedBatches(newExpanded);
+                                }}
+                                className="p-2 hover:bg-green-100 rounded-lg transition-colors"
+                              >
+                                {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        {batch.note && (
+                          <div className="mt-2 text-sm text-slate-600">
+                            <strong>Ghi chú:</strong> {batch.note}
+                          </div>
+                        )}
+                      </div>
+                      
+                      {isExpanded && (
+                        <div className="p-4 bg-white border-t border-slate-200">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead className="bg-slate-50">
+                                <tr>
+                                  <th className="px-3 py-2 text-left">Mã GD</th>
+                                  <th className="px-3 py-2 text-left">Người dùng</th>
+                                  <th className="px-3 py-2 text-left">Ngày GD</th>
+                                  <th className="px-3 py-2 text-right">Số tiền từ bill</th>
+                                  <th className="px-3 py-2 text-right">Tiền từ file merchants</th>
+                                  <th className="px-3 py-2 text-left">Loại</th>
+                                  <th className="px-3 py-2 text-left">Điểm thu</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {batchBills.map((bill: UserBill) => {
+                                  const user = users.find(u => u.id === bill.userId);
+                                  // Find corresponding ReportRecord for merchantAmount
+                                  const report = batchReports.find((r: ReportRecord) => r.userBillId === bill.id);
+                                  return (
+                                    <tr key={bill.id} className="hover:bg-slate-50">
+                                      <td className="px-3 py-2 font-mono text-xs">{bill.transactionCode}</td>
+                                      <td className="px-3 py-2">
+                                        <div>
+                                          <div className="font-medium">{user?.fullName || bill.userId}</div>
+                                          {user?.phone && (
+                                            <div className="text-xs text-slate-500">{user.phone}</div>
+                                          )}
+                                        </div>
+                                      </td>
+                                      <td className="px-3 py-2">{formatDateOnly(bill.createdAt || '')}</td>
+                                      <td className="px-3 py-2 text-right font-medium">{formatAmount(bill.amount)}</td>
+                                      <td className="px-3 py-2 text-right">
+                                        {report?.merchantAmount !== undefined && report.merchantAmount !== null && report.merchantAmount > 0
+                                          ? <span className="font-medium text-indigo-600">{formatAmount(report.merchantAmount)}</span>
+                                          : <span className="text-slate-400">-</span>}
+                                      </td>
+                                      <td className="px-3 py-2">{bill.paymentMethod}</td>
+                                      <td className="px-3 py-2 font-mono text-xs">{bill.pointOfSaleName || '-'}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
               {totalBatchesPages > 1 && (

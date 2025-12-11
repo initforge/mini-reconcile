@@ -347,7 +347,7 @@ const ReportTable: React.FC<ReportTableProps> = ({
   const showEditColumn = false; // Disabled: Admin no longer needs action column
   const showConfirmMatchButton = role === 'AGENT'; // Show confirm match button for agents
   const showFeeColumns = role === 'ADMIN'; // Show Fee and Net Amount columns for Admin only
-  const showAdminPaymentStatus = role === 'ADMIN'; // Admin payment status column
+  const showAdminPaymentStatus = role === 'ADMIN' || role === 'AGENT'; // Admin payment status column - hiển thị cho cả Admin và Agent
   const showAgentPaymentFromAdmin = role === 'AGENT'; // Agent: payment from Admin
   const showAgentPaymentToUser = role === 'AGENT'; // Agent: payment to User
 
@@ -623,8 +623,8 @@ const ReportTable: React.FC<ReportTableProps> = ({
                 <thead className="bg-slate-50 border-b-2 border-slate-300">
                   {/* Header row with 3 main column groups */}
                   <tr>
-                    {/* Thông tin từ Bill: Mã giao dịch + (Điểm thu nếu USER/AGENT) + (Người dùng nếu showUserColumn) + (Tên đại lý nếu showAgentColumn) */}
-                    <th colSpan={1 + (role === 'USER' || role === 'AGENT' ? 1 : 0) + (showUserColumn ? 1 : 0) + (showAgentColumn ? 1 : 0)} className="px-1.5 sm:px-2 md:px-2.5 lg:px-4 py-1.5 sm:py-1.5 md:py-2 text-center font-bold text-slate-700 bg-blue-50 border-r-2 border-slate-300">
+                    {/* Thông tin từ Bill: Mã giao dịch + Điểm thu + (Người dùng nếu showUserColumn) + (Tên đại lý nếu showAgentColumn) */}
+                    <th colSpan={1 + 1 + (showUserColumn ? 1 : 0) + (showAgentColumn ? 1 : 0)} className="px-1.5 sm:px-2 md:px-2.5 lg:px-4 py-1.5 sm:py-1.5 md:py-2 text-center font-bold text-slate-700 bg-blue-50 border-r-2 border-slate-300">
                       Thông tin từ Bill
                     </th>
                     {/* Thông tin từ Merchants: Thời gian GD + Mã giao dịch + Chi nhánh + Mã điểm thu + Điểm thu + Số hóa đơn + Mã chuẩn chi + Số điện thoại + Số tiền trước KM + Số tiền sau KM + empty cell */}
@@ -651,11 +651,10 @@ const ReportTable: React.FC<ReportTableProps> = ({
                     <th className="px-2 sm:px-3 md:px-4 lg:px-6 py-2 sm:py-2.5 md:py-3 text-left text-[10px] sm:text-xs font-medium text-slate-500 uppercase tracking-wider bg-blue-50 border-r border-slate-200">
                       Mã giao dịch
                     </th>
-                    {(role === 'USER' || role === 'AGENT') && (
-                      <th className="px-2 sm:px-3 md:px-4 lg:px-6 py-2 sm:py-2.5 md:py-3 text-left text-[10px] sm:text-xs font-medium text-slate-500 uppercase tracking-wider bg-blue-50 border-r border-slate-200">
-                        Điểm thu
-                      </th>
-                    )}
+                    {/* 2. Điểm thu - hiển thị cho tất cả roles */}
+                    <th className="px-2 sm:px-3 md:px-4 lg:px-6 py-2 sm:py-2.5 md:py-3 text-left text-[10px] sm:text-xs font-medium text-slate-500 uppercase tracking-wider bg-blue-50 border-r border-slate-200">
+                      Điểm thu
+                    </th>
                     {showUserColumn && (
                       <th className="px-2 sm:px-3 md:px-4 lg:px-6 py-2 sm:py-2.5 md:py-3 text-left text-[10px] sm:text-xs font-medium text-slate-500 uppercase tracking-wider bg-blue-50 border-r border-slate-200">
                         Người dùng
@@ -849,15 +848,14 @@ const ReportTable: React.FC<ReportTableProps> = ({
                           <span className="text-slate-400">-</span>
                         )}
                       </td>
-                      {(role === 'USER' || role === 'AGENT') && (
-                        <td className="px-2 sm:px-3 md:px-4 lg:px-6 py-2 sm:py-3 md:py-4 whitespace-nowrap text-[10px] sm:text-xs md:text-sm text-slate-500 bg-blue-50 border-r border-slate-200">
-                          {record.userBillId ? (
-                            <span className="truncate block max-w-[100px] sm:max-w-none">{record.pointOfSaleName || record.merchantPointOfSaleName || '-'}</span>
-                          ) : (
-                            <span className="text-slate-400">-</span>
-                          )}
-                        </td>
-                      )}
+                      {/* 2. Điểm thu - hiển thị cho tất cả roles */}
+                      <td className="px-2 sm:px-3 md:px-4 lg:px-6 py-2 sm:py-3 md:py-4 whitespace-nowrap text-[10px] sm:text-xs md:text-sm text-slate-500 bg-blue-50 border-r border-slate-200">
+                        {record.userBillId ? (
+                          <span className="truncate block max-w-[100px] sm:max-w-none">{record.pointOfSaleName || record.merchantPointOfSaleName || '-'}</span>
+                        ) : (
+                          <span className="text-slate-400">-</span>
+                        )}
+                      </td>
                       {showUserColumn && (
                         <td className="px-2 sm:px-3 md:px-4 lg:px-6 py-2 sm:py-3 md:py-4 whitespace-nowrap text-[10px] sm:text-xs md:text-sm text-slate-500 bg-blue-50 border-r border-slate-200">
                           {record.userId ? (

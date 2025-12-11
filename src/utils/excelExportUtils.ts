@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 import { AppSettings } from '../../types';
 
 // Note: Styling constants removed - regular xlsx doesn't support cell styling

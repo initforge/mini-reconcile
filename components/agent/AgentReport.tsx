@@ -14,8 +14,10 @@ const AgentReport: React.FC = () => {
 
   const { data: usersData } = useRealtimeData<Record<string, User>>('/users');
   const { data: agentsData } = useRealtimeData<Record<string, Agent>>('/agents');
+  const { data: billsData } = useRealtimeData<Record<string, any>>('/user_bills');
   const users = FirebaseUtils.objectToArray(usersData || {});
   const agents = FirebaseUtils.objectToArray(agentsData || {});
+  const allBills = FirebaseUtils.objectToArray(billsData || {});
   const currentAgent = agents.find(a => a.id === agentId);
 
   // Helper function to get today's date in YYYY-MM-DD format
@@ -43,14 +45,21 @@ const AgentReport: React.FC = () => {
   const [sortBy, setSortBy] = useState<'user' | 'date' | 'amount'>('user');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
-  // Get users that have bills for this agent
+  // Get users that have bills for this agent (only users who have uploaded bills)
   const agentUsers = React.useMemo(() => {
-    if (!agentCode) return [];
-    return users.filter(u => {
-      // Filter users that have report records for this agent
-      return true; // Will be filtered by agentCode in the service
-    });
-  }, [users, agentCode]);
+    if (!agentId && !agentCode) return [];
+    
+    // Get all bills for this agent
+    const agentBills = allBills.filter((bill: any) => 
+      bill.agentId === agentId || bill.agentCode === agentCode
+    );
+    
+    // Get unique user IDs from bills
+    const userIds = new Set(agentBills.map((bill: any) => bill.userId).filter(Boolean));
+    
+    // Filter users to only those who have uploaded bills for this agent
+    return users.filter(u => userIds.has(u.id));
+  }, [users, agentId, agentCode, allBills]);
 
   // Get unique point of sales from all report records
   const [allPointOfSales, setAllPointOfSales] = useState<string[]>([]);
@@ -112,13 +121,22 @@ const AgentReport: React.FC = () => {
         limit: 10000 // Load all for sorting, then paginate
       });
       
-      // KHÔNG filter UNMATCHED - hiển thị TẤT CẢ records (MATCHED, ERROR, UNMATCHED)
-      // Chỉ filter các records không hợp lệ (không có transactionCode hoặc amount)
+      // CHỈ hiển thị records đã có file merchants khớp (có merchantTransactionId)
+      // Bills chưa có merchants KHÔNG được hiển thị trong báo cáo
       let filteredRecords = result.records.filter(r => {
-        // Loại bỏ records không có transactionCode hoặc amount hợp lệ
+        // PHẢI có merchantTransactionId (đã có file merchants)
+        if (!r.merchantTransactionId) {
+          return false;
+        }
+        
+        // Phải có transactionCode hợp lệ
         if (!r.transactionCode || r.transactionCode.trim() === '') return false;
-        if (!r.amount || isNaN(r.amount) || !isFinite(r.amount) || r.amount <= 0) return false;
-        return true;
+        
+        // Phải có ít nhất một giá trị amount hợp lệ (> 0)
+        const hasValidAmount = (r.merchantAmount && !isNaN(r.merchantAmount) && r.merchantAmount > 0) || 
+                               (r.amount && !isNaN(r.amount) && r.amount > 0);
+        
+        return hasValidAmount;
       });
       
       // Apply date filter client-side (simple logic like "Đợt chi trả" tab)
@@ -136,6 +154,15 @@ const AgentReport: React.FC = () => {
           } catch (error) {
             return true;
           }
+        });
+      }
+      
+      // Apply search term filter (transaction code)
+      if (searchTerm && searchTerm.trim()) {
+        const searchLower = searchTerm.toLowerCase().trim();
+        filteredRecords = filteredRecords.filter(r => {
+          const code = r.transactionCode ? String(r.transactionCode).toLowerCase() : '';
+          return code.includes(searchLower);
         });
       }
       
@@ -200,6 +227,7 @@ const AgentReport: React.FC = () => {
     agentId?: string;
     userId?: string;
     pointOfSaleName?: string;
+    searchTerm?: string;
   }) => {
     // If dates are provided and different from today, activate date filter
     setDateFrom(newFilters.dateFrom);
@@ -207,6 +235,7 @@ const AgentReport: React.FC = () => {
     setStatusFilter(newFilters.status);
     setSelectedUserId(newFilters.userId || 'all');
     setSelectedPointOfSaleName(newFilters.pointOfSaleName || 'all');
+    setSearchTerm(newFilters.searchTerm || '');
     setCurrentPage(1);
   };
 
@@ -261,7 +290,8 @@ const AgentReport: React.FC = () => {
                     dateTo,
                     status: statusFilter,
                     userId: selectedUserId !== 'all' ? selectedUserId : undefined,
-                    pointOfSaleName: selectedPointOfSaleName !== 'all' ? selectedPointOfSaleName : undefined
+                    pointOfSaleName: selectedPointOfSaleName !== 'all' ? selectedPointOfSaleName : undefined,
+                    searchTerm
                   }}
                   users={agentUsers}
                   pointOfSales={availablePointOfSales}

@@ -11,6 +11,7 @@ export interface ReportFiltersProps {
     agentId?: string;
     userId?: string;
     pointOfSaleName?: string;
+    searchTerm?: string; // Search by transaction code
   };
   users?: User[];
   agents?: Agent[];
@@ -22,6 +23,7 @@ export interface ReportFiltersProps {
     agentId?: string;
     userId?: string;
     pointOfSaleName?: string;
+    searchTerm?: string;
   }) => void;
   onClear?: () => void;
 }
@@ -165,6 +167,22 @@ const ReportFilters: React.FC<ReportFiltersProps> = ({
             </select>
           </div>
         )}
+        
+        {/* Search by transaction code - for all roles */}
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-2">
+            Tìm kiếm mã chuẩn chi
+          </label>
+          <div className="relative">
+            <input
+              type="text"
+              value={filters.searchTerm || ''}
+              onChange={(e) => handleChange('searchTerm', e.target.value)}
+              placeholder="Nhập mã chuẩn chi"
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            />
+          </div>
+        </div>
         
         {(role === 'ADMIN' || role === 'AGENT' || role === 'USER') && (
           <div className="flex items-end">

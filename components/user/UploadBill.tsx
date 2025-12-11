@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Upload, Image as ImageIcon, CheckCircle, AlertCircle, X, Loader, RefreshCw, HelpCircle, ExternalLink } from 'lucide-react';
+import { Upload, Image as ImageIcon, CheckCircle, AlertCircle, X, Loader, RefreshCw, HelpCircle, ExternalLink, Trash2, Calendar, Search, Filter } from 'lucide-react';
 import { extractTransactionFromImage } from '../../services/geminiService';
 import { UserService } from '../../src/lib/userServices';
+import { ReportService } from '../../src/lib/reportServices';
 import { useRealtimeData, FirebaseUtils } from '../../src/lib/firebaseHooks';
-import type { Agent, PaymentMethod } from '../../types';
+import type { Agent, PaymentMethod, UserBill, ReportRecord } from '../../types';
+import Pagination from '../Pagination';
 
 type BillPreview = {
   file: File;
@@ -732,6 +734,390 @@ const UploadBill: React.FC = () => {
           <li>Hệ thống sẽ tự động nhận diện loại bill và trích xuất thông tin</li>
         </ul>
       </div>
+
+      {/* Lịch sử up bill - Gộp chung với Tab Up bill */}
+      <BillHistorySection userId={userId} />
+    </div>
+  );
+};
+
+// Component riêng cho Lịch sử up bill
+const BillHistorySection: React.FC<{ userId: string | null }> = ({ userId }) => {
+  const { data: billsData } = useRealtimeData<Record<string, UserBill>>('/user_bills');
+  const { data: agentsData } = useRealtimeData<Record<string, Agent>>('/agents');
+  const { data: reportRecordsData } = useRealtimeData<Record<string, ReportRecord>>('/report_records');
+  
+  const agents = FirebaseUtils.objectToArray(agentsData || {});
+  const allBills = FirebaseUtils.objectToArray(billsData || {});
+  
+  // Filter states
+  const [dateFrom, setDateFrom] = useState<string>('');
+  const [dateTo, setDateTo] = useState<string>('');
+  const [selectedAgentId, setSelectedAgentId] = useState<string>('all');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 20;
+  
+  // Delete confirmation state
+  const [deletingBillId, setDeletingBillId] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  
+  // Get user's bills
+  const userBills = useMemo(() => {
+    if (!userId) return [];
+    return allBills.filter(bill => bill.userId === userId);
+  }, [allBills, userId]);
+  
+  // Filter agents that have bills for this user
+  const agentsWithBills = useMemo(() => {
+    if (!userId) return [];
+    return agents.filter(agent => {
+      return userBills.some(bill => bill.agentId === agent.id);
+    });
+  }, [agents, userBills, userId]);
+  
+  // Load report records to check status
+  const [reportRecordsFromDB, setReportRecordsFromDB] = useState<ReportRecord[]>([]);
+  
+  useEffect(() => {
+    const loadReportRecords = async () => {
+      if (!userId) return;
+      
+      try {
+        const result = await ReportService.getAllReportRecordsWithMerchants({
+          userId,
+          dateFrom: undefined,
+          dateTo: undefined,
+          status: undefined,
+          agentId: undefined,
+          agentCode: undefined,
+          pointOfSaleName: undefined
+        }, {
+          limit: 10000
+        });
+        
+        setReportRecordsFromDB(result.records);
+      } catch (error) {
+        console.error('[BillHistorySection] Error loading report records:', error);
+      }
+    };
+    
+    loadReportRecords();
+  }, [userId]);
+  
+  // Map billId -> ReportRecord
+  const reportRecordsByBillId = useMemo(() => {
+    const map: Record<string, ReportRecord> = {};
+    reportRecordsFromDB.forEach((record: ReportRecord) => {
+      if (record.userBillId) {
+        map[record.userBillId] = record;
+      }
+    });
+    return map;
+  }, [reportRecordsFromDB]);
+  
+  // Filter bills
+  const filteredBills = useMemo(() => {
+    let filtered = userBills;
+    
+    // Filter by agent
+    if (selectedAgentId !== 'all') {
+      filtered = filtered.filter(bill => bill.agentId === selectedAgentId);
+    }
+    
+    // Filter by date
+    if (dateFrom || dateTo) {
+      filtered = filtered.filter(bill => {
+        const billDate = bill.createdAt || bill.transactionDate;
+        if (!billDate) return true;
+        try {
+          const dateStr = typeof billDate === 'string' ? billDate : billDate.toISOString();
+          const date = dateStr.split('T')[0];
+          if (dateFrom && date < dateFrom) return false;
+          if (dateTo && date > dateTo) return false;
+          return true;
+        } catch {
+          return true;
+        }
+      });
+    }
+    
+    return filtered;
+  }, [userBills, selectedAgentId, dateFrom, dateTo]);
+  
+  // Sort by date (newest first)
+  const sortedBills = useMemo(() => {
+    return [...filteredBills].sort((a, b) => {
+      const dateA = new Date(a.createdAt || 0).getTime();
+      const dateB = new Date(b.createdAt || 0).getTime();
+      return dateB - dateA;
+    });
+  }, [filteredBills]);
+  
+  // Paginate
+  const totalPages = Math.ceil(sortedBills.length / itemsPerPage);
+  const paginatedBills = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return sortedBills.slice(startIndex, startIndex + itemsPerPage);
+  }, [sortedBills, currentPage, itemsPerPage]);
+  
+  const getAgentName = (agentId: string) => {
+    const agent = agents.find(a => a.id === agentId);
+    return agent ? agent.name : 'N/A';
+  };
+  
+  const getAgentCode = (agentId: string) => {
+    const agent = agents.find(a => a.id === agentId);
+    return agent ? agent.code : 'N/A';
+  };
+  
+  const formatAmount = (amount: number) => {
+    return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(amount);
+  };
+  
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('vi-VN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+  
+  const getStatusBadge = (bill: UserBill) => {
+    const reportRecord = reportRecordsByBillId[bill.id];
+    
+    if (reportRecord) {
+      const status = reportRecord.reconciliationStatus || reportRecord.status;
+      switch (status) {
+        case 'MATCHED':
+        case 'DONE':
+          return <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">Đã đối soát</span>;
+        case 'ERROR':
+          return <span className="px-2 py-1 bg-red-100 text-red-800 rounded-full text-xs font-medium">Lỗi đối soát</span>;
+        case 'UNMATCHED':
+          return <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded-full text-xs font-medium">Chưa khớp</span>;
+        case 'PENDING':
+          return <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded-full text-xs font-medium">Chờ đối soát</span>;
+        default:
+          return <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">Đã đối soát</span>;
+      }
+    }
+    
+    switch (bill.status) {
+      case 'MATCHED':
+      case 'DONE':
+        return <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">Đã đối soát</span>;
+      case 'ERROR':
+        return <span className="px-2 py-1 bg-red-100 text-red-800 rounded-full text-xs font-medium">Lỗi</span>;
+      case 'PENDING':
+      default:
+        return <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded-full text-xs font-medium">Chờ đối soát</span>;
+    }
+  };
+  
+  const isBillLocked = (bill: UserBill): boolean => {
+    // Chỉ khóa khi đại lý đã đối soát (đã thanh toán cho user)
+    // Không khóa khi chỉ khớp với merchants
+    return bill.agentPaymentStatus === 'PAID';
+  };
+  
+  const handleDeleteBill = (billId: string) => {
+    setDeletingBillId(billId);
+  };
+  
+  const handleConfirmDelete = async () => {
+    if (!deletingBillId) return;
+    
+    setIsDeleting(true);
+    try {
+      await UserService.deleteUserBill(deletingBillId);
+      setDeletingBillId(null);
+      setCurrentPage(1); // Reset to first page after deletion
+    } catch (error: any) {
+      console.error('Error deleting bill:', error);
+      alert('Có lỗi khi xóa bill. Vui lòng thử lại.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+  
+  if (!userId) {
+    return null;
+  }
+  
+  return (
+    <div className="space-y-6 mt-12">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold text-slate-800">Lịch sử up bill</h2>
+      </div>
+      
+      {/* Filters */}
+      <div className="bg-white rounded-xl border border-slate-200 p-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Từ ngày</label>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => {
+                setDateFrom(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Đến ngày</label>
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => {
+                setDateTo(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Đại lý</label>
+            <select
+              value={selectedAgentId}
+              onChange={(e) => {
+                setSelectedAgentId(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+            >
+              <option value="all">Tất cả đại lý</option>
+              {agentsWithBills.map(agent => (
+                <option key={agent.id} value={agent.id}>{agent.name} ({agent.code})</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </div>
+      
+      {/* Bills Table */}
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-slate-200">
+            <thead className="bg-slate-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Đại lý</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Ngày</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Mã GD</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Số tiền</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Loại bill</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Điểm thu</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Trạng thái</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Thao tác</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-slate-200">
+              {paginatedBills.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-6 py-8 text-center text-slate-500">
+                    Không có bill nào
+                  </td>
+                </tr>
+              ) : (
+                paginatedBills.map((bill) => {
+                  const locked = isBillLocked(bill);
+                  return (
+                    <tr key={bill.id} className="hover:bg-slate-50">
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div>
+                          <div className="text-sm font-medium text-slate-900">{getAgentName(bill.agentId)}</div>
+                          <div className="text-sm text-slate-500">{getAgentCode(bill.agentId)}</div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                        {formatDate(bill.createdAt)}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-slate-900">
+                        {bill.transactionCode}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900">
+                        {formatAmount(bill.amount)}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                        {bill.paymentMethod}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                        {bill.pointOfSaleName || '-'}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {getStatusBadge(bill)}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm">
+                        {!locked && (
+                          <button
+                            onClick={() => handleDeleteBill(bill.id)}
+                            className="p-2 rounded-lg transition-colors text-red-600 hover:bg-red-50"
+                            title="Thu hồi bill"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                        {locked && (
+                          <span className="text-xs text-slate-400">Đã khóa</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+        
+        {/* Pagination */}
+        {sortedBills.length > 0 && (
+          <div className="bg-white px-6 py-4 border-t border-slate-200">
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPageChange={setCurrentPage}
+            />
+          </div>
+        )}
+      </div>
+      
+      {/* Delete Confirmation Modal */}
+      {deletingBillId && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+            <div className="flex items-center space-x-3 mb-4">
+              <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
+                <AlertCircle className="w-5 h-5 text-red-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-slate-900">Xác nhận thu hồi</h3>
+            </div>
+            
+            <p className="text-slate-600 mb-6">
+              Bạn có chắc chắn muốn thu hồi bill này? Bill sẽ bị xóa khỏi hệ thống và mã giao dịch có thể được sử dụng lại cho đại lý khác. Hành động này không thể hoàn tác.
+            </p>
+            
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setDeletingBillId(null)}
+                className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors"
+              >
+                Hủy
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                disabled={isDeleting}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center space-x-2"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>{isDeleting ? 'Đang xóa...' : 'Thu hồi'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

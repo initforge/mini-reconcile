@@ -1,5 +1,5 @@
 import React from 'react';
-import { Upload, History, CreditCard, Settings, LogOut, FileText, X } from 'lucide-react';
+import { Upload, CreditCard, Settings, LogOut, FileText, X } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useRealtimeData, FirebaseUtils } from '../../src/lib/firebaseHooks';
 import type { User } from '../../types';
@@ -25,7 +25,6 @@ const UserSidebar: React.FC<UserSidebarProps> = ({ activeTab, onLogout, isMobile
 
   const menuItems = [
     { id: 'upload', label: 'Up Bill', icon: Upload, path: '/user/upbill' },
-    { id: 'history', label: 'Lịch Sử', icon: History, path: '/user/history' },
     { id: 'report', label: 'Báo cáo', icon: FileText, path: '/user/report' },
     { id: 'payment', label: 'Thanh Toán', icon: CreditCard, path: '/user/payment' },
     { id: 'utilities', label: 'Tiện Ích', icon: Settings, path: '/user/utilities' },

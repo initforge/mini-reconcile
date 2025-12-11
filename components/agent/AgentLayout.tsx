@@ -14,6 +14,7 @@ const AgentLayout: React.FC = () => {
     if (location.pathname.includes('/report')) return 'report';
     if (location.pathname.includes('/reconciliation')) return 'reconciliation';
     if (location.pathname.includes('/payment')) return 'payment';
+    if (location.pathname.includes('/admin-payment')) return 'adminPayment';
     if (location.pathname.includes('/utilities')) return 'utilities';
     return 'report';
   };

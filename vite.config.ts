@@ -25,8 +25,12 @@ export default defineConfig(({ mode }) => {
       },
       build: {
         commonjsOptions: {
-          include: [/xlsx-js-style/, /node_modules/]
+          include: [/xlsx-js-style/, /node_modules/],
+          transformMixedEsModules: true
         }
+      },
+      ssr: {
+        noExternal: ['xlsx-js-style']
       }
     };
 });

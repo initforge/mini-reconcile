@@ -339,8 +339,9 @@ export const ReportService = {
       }
     }
 
-    // Bước 2: Thêm các bills chưa có merchants vào records
-    // Hiển thị cả bills chưa có merchants (reconciliationStatus = 'PENDING') để người dùng thấy trong báo cáo
+    // Bước 2: CHỈ thêm các bills đã có merchants vào records
+    // KHÔNG thêm bills chưa có merchants - chúng chỉ xuất hiện ở "Bills đang chờ đối soát"
+    // Chỉ merge bill data vào các records đã có merchantTransactionId
     for (const bill of allBills) {
       if (!bill.transactionCode || bill.transactionCode.trim() === '') {
         continue;
@@ -351,64 +352,42 @@ export const ReportService = {
       // Tìm ReportRecord hiện có cho bill này
       const existingReport = allReportRecords.find(r => r.userBillId === bill.id);
       
-      // Kiểm tra xem bill này có merchant transaction chưa
-      const hasMerchantTransaction = existingReport && (
-        existingReport.merchantTransactionId || 
-        existingReport.merchantAmount || 
-        existingReport.merchantsFileData
-      );
+      // Kiểm tra xem đã có record với merchantTransactionId cho transactionCode này chưa
+      const existingRecord = recordsByTransactionCode.get(code);
       
-      // Nếu bill chưa có merchant transaction và có reconciliationStatus = 'PENDING'
-      if (!hasMerchantTransaction && existingReport && existingReport.reconciliationStatus === 'PENDING') {
-        // Kiểm tra xem đã có record cho transactionCode này chưa
-        const existingRecord = recordsByTransactionCode.get(code);
-        
-        // Nếu chưa có record, hoặc record hiện tại không có userBillId hoặc userBillId không match với bill này
-        if (!existingRecord || !existingRecord.userBillId || existingRecord.userBillId !== bill.id) {
-          recordsByTransactionCode.set(code, existingReport);
+      // Nếu đã có record với merchantTransactionId, đảm bảo userBillId được set đúng
+      if (existingRecord && existingRecord.merchantTransactionId) {
+        // Nếu record chưa có userBillId hoặc userBillId không match, cập nhật
+        if (!existingRecord.userBillId || existingRecord.userBillId !== bill.id) {
+          // Merge bill data vào record
+          existingRecord.userBillId = bill.id;
+          existingRecord.userId = bill.userId;
+          existingRecord.agentId = bill.agentId;
+          existingRecord.agentCode = bill.agentCode;
+          existingRecord.amount = bill.amount;
+          existingRecord.paymentMethod = bill.paymentMethod;
+          existingRecord.pointOfSaleName = bill.pointOfSaleName;
+          existingRecord.transactionDate = bill.timestamp;
+          existingRecord.userBillCreatedAt = bill.createdAt;
+          existingRecord.invoiceNumber = bill.invoiceNumber;
         }
-      } else if (!existingReport) {
-        // Bill chưa có ReportRecord → tạo virtual record nếu chưa có record cho transactionCode này
-        const existingRecord = recordsByTransactionCode.get(code);
-        if (!existingRecord || !existingRecord.userBillId) {
-          const virtualRecord: ReportRecord = {
-            id: `virtual_bill_${bill.id}`,
-            userBillId: bill.id,
-            userId: bill.userId,
-            agentId: bill.agentId,
-            agentCode: bill.agentCode,
-            transactionCode: code,
-            amount: bill.amount,
-            paymentMethod: bill.paymentMethod,
-            pointOfSaleName: bill.pointOfSaleName,
-            transactionDate: bill.timestamp,
-            userBillCreatedAt: bill.createdAt,
-            invoiceNumber: bill.invoiceNumber,
-            status: 'UNMATCHED',
-            reconciliationStatus: 'PENDING',
-            errorMessage: 'Chưa có file merchants hoặc không tìm thấy mã chuẩn chi trong merchants',
-            reconciledAt: FirebaseUtils.getServerTimestamp(),
-            reconciledBy: 'ADMIN',
-            createdAt: bill.createdAt || FirebaseUtils.getServerTimestamp()
-          };
-          recordsByTransactionCode.set(code, virtualRecord);
-        }
+      } else if (existingReport && existingReport.merchantTransactionId) {
+        // Nếu có ReportRecord với merchantTransactionId nhưng chưa có trong map, thêm vào
+        recordsByTransactionCode.set(code, existingReport);
       }
     }
 
-    // Bước 3: Lấy tất cả records (bao gồm cả bills chưa có merchants và merchants chưa có bills)
-    // Hiển thị:
-    // - Records đã match CẢ bills VÀ merchants (MATCHED, ERROR)
-    // - Records chỉ có bills chưa có merchants (PENDING) - để hiển thị trong báo cáo
-    // - Records chỉ có merchantTransactionId nhưng không có userBillId (merchants không có bills) - hiển thị merchants data, bills để trống
+    // Bước 3: CHỈ trả về records có merchant data (đã có file merchants khớp)
+    // Bills chưa có merchants KHÔNG được hiển thị trong báo cáo
+    // Chúng chỉ xuất hiện ở "Bills đang chờ đối soát"
     const finalRecords = Array.from(recordsByTransactionCode.values())
       .filter(record => {
-        // Hiển thị nếu có userBillId (có bill) HOẶC có merchantTransactionId (có merchants data)
-        // Điều này cho phép hiển thị:
-        // 1. Bills có merchants (có cả userBillId và merchantTransactionId)
-        // 2. Bills chưa có merchants (chỉ có userBillId, reconciliationStatus = PENDING)
-        // 3. Merchants chưa có bills (chỉ có merchantTransactionId, không có userBillId)
-        return record.userBillId !== undefined || record.merchantTransactionId !== undefined;
+        // CHỈ hiển thị nếu có merchantTransactionId (đã có file merchants)
+        // Điều này đảm bảo:
+        // 1. Bills có merchants (có cả userBillId và merchantTransactionId) - MATCHED, ERROR
+        // 2. Merchants chưa có bills (chỉ có merchantTransactionId, không có userBillId) - UNMATCHED
+        // KHÔNG hiển thị: Bills chưa có merchants (chỉ có userBillId, không có merchantTransactionId)
+        return record.merchantTransactionId !== undefined;
       });
 
     // Apply filters
