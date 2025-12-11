@@ -135,7 +135,14 @@ const AdminReport: React.FC = () => {
           if (!dateToCheck) return true;
           
           try {
-            const dateStr = typeof dateToCheck === 'string' ? dateToCheck : dateToCheck.toISOString();
+            let dateStr: string;
+            if (typeof dateToCheck === 'string') {
+              dateStr = dateToCheck;
+            } else if (dateToCheck && typeof dateToCheck === 'object' && 'toISOString' in dateToCheck) {
+              dateStr = (dateToCheck as Date).toISOString();
+            } else {
+              dateStr = String(dateToCheck);
+            }
             const date = dateStr.split('T')[0];
             if (dateFrom && date < dateFrom) return false;
             if (dateTo && date > dateTo) return false;
@@ -241,6 +248,7 @@ const AdminReport: React.FC = () => {
     agentId?: string;
     userId?: string;
     pointOfSaleName?: string;
+    searchTerm?: string;
   }) => {
     setDateFrom(newFilters.dateFrom);
     setDateTo(newFilters.dateTo);
@@ -334,12 +342,20 @@ const AdminReport: React.FC = () => {
         totalNet += (amount - fee);
       });
 
-      // Helper function để format datetime
+      // Helper function để format amount giống như trên giao diện
+      const formatAmount = (amount: number | undefined | null): string => {
+        if (amount === null || amount === undefined || isNaN(amount) || !isFinite(amount)) {
+          return '0 ₫';
+        }
+        return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(amount);
+      };
+
+      // Helper function để format datetime - xuất dưới dạng string giống trên giao diện
       const formatDateTime = (dateString: string | undefined): string => {
-        if (!dateString) return '';
+        if (!dateString) return '-';
         try {
           const date = new Date(dateString);
-          if (isNaN(date.getTime())) return '';
+          if (isNaN(date.getTime())) return '-';
           const day = String(date.getDate()).padStart(2, '0');
           const month = String(date.getMonth() + 1).padStart(2, '0');
           const year = date.getFullYear();
@@ -348,22 +364,22 @@ const AdminReport: React.FC = () => {
           const seconds = String(date.getSeconds()).padStart(2, '0');
           return `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
         } catch {
-          return '';
+          return '-';
         }
       };
 
-      // Helper function để format date (không có giờ)
+      // Helper function để format date (không có giờ) - xuất dưới dạng string
       const formatDate = (dateString: string | undefined): string => {
-        if (!dateString) return '';
+        if (!dateString) return '-';
         try {
           const date = new Date(dateString);
-          if (isNaN(date.getTime())) return '';
+          if (isNaN(date.getTime())) return '-';
           const day = String(date.getDate()).padStart(2, '0');
           const month = String(date.getMonth() + 1).padStart(2, '0');
           const year = date.getFullYear();
           return `${day}/${month}/${year}`;
         } catch {
-          return '';
+          return '-';
         }
       };
 
@@ -553,23 +569,25 @@ const AdminReport: React.FC = () => {
         rowData['Số điện thoại'] = getMerchantFileValue(record, ['Số điện thoại', 'số điện thoại', 'SĐT', 'sđt', 'SỐ ĐIỆN THOẠI']) || 
           record.merchantPhoneNumber || '';
         
-        // Số tiền trước KM (dynamic)
+        // Số tiền trước KM (dynamic) - xuất dưới dạng string
         if (tienTruocKMColumn) {
-          rowData['Số tiền trước KM'] = getMerchantAmount(record, true);
+          const amountBefore = getMerchantAmount(record, true);
+          rowData['Số tiền trước KM'] = amountBefore > 0 ? formatAmount(amountBefore) : '-';
         }
         
-        // Số tiền sau KM (dynamic)
+        // Số tiền sau KM (dynamic) - xuất dưới dạng string
         if (tienSauKMColumn) {
-          rowData['Số tiền sau KM'] = getMerchantAmount(record, false);
+          const amountAfter = getMerchantAmount(record, false);
+          rowData['Số tiền sau KM'] = amountAfter > 0 ? formatAmount(amountAfter) : '-';
         }
         
-        // NHÓM 3: Kết quả đối soát
-        rowData['Loại thanh toán'] = record.paymentMethod || '';
-        rowData['Số tiền giao dịch'] = amount;
+        // NHÓM 3: Kết quả đối soát - xuất dưới dạng string giống trên giao diện
+        rowData['Loại thanh toán'] = record.paymentMethod || '-';
+        rowData['Số tiền giao dịch'] = formatAmount(amount);
         rowData['Ngày đối soát'] = formatDate(record.reconciledAt);
-        rowData['Phí (%)'] = feePercentage;
-        rowData['Phí'] = feeAmount;
-        rowData['Còn lại'] = netAmount;
+        rowData['Phí (%)'] = feePercentage > 0 ? `${feePercentage}%` : '-';
+        rowData['Phí'] = feeAmount > 0 ? formatAmount(feeAmount) : '-';
+        rowData['Còn lại'] = formatAmount(netAmount);
         rowData['Trạng thái'] = record.status === 'MATCHED' ? 'Khớp' : 
                                  record.status === 'ERROR' ? 'Lỗi' : 'Chờ đối soát';
         rowData['Ngày TT từ Admin'] = formatDate(record.adminPaidAt);
@@ -577,7 +595,7 @@ const AdminReport: React.FC = () => {
                                             record.adminPaymentStatus === 'UNPAID' ? 'Chưa thanh toán' : 
                                             record.adminPaymentStatus === 'PARTIAL' ? 'Thanh toán một phần' : 
                                             record.adminPaymentStatus === 'CANCELLED' ? 'Đã hủy' : 'Chưa thanh toán';
-        rowData['Ghi chú'] = record.errorMessage || record.note || '';
+        rowData['Ghi chú'] = record.errorMessage || record.note || '-';
 
         return rowData;
       });
@@ -632,15 +650,41 @@ const AdminReport: React.FC = () => {
       const totalNetCol = headers.indexOf('Còn lại'); // Cột còn lại (Result group)
       
       const summaryCells = [
-        { col: totalTransactionsCol, label: 'Tổng cộng GD', value: totalTransactions, color: billGroupColor }, // Bill group color
-        { col: totalAmountCol, label: 'Tổng số tiền', value: totalAmount, color: resultGroupColor }, // Result group color
-        { col: totalFeeCol, label: 'Tổng phí', value: totalFee, color: resultGroupColor }, // Result group color
-        { col: totalNetCol, label: 'Tổng tiền sau phí', value: totalNet, color: resultGroupColor } // Result group color
+        { col: totalTransactionsCol, label: 'Tổng cộng GD', value: String(totalTransactions), color: billGroupColor }, // Bill group color - xuất string
+        { col: totalAmountCol, label: 'Tổng số tiền', value: formatAmount(totalAmount), color: resultGroupColor }, // Result group color - xuất string
+        { col: totalFeeCol, label: 'Tổng phí', value: formatAmount(totalFee), color: resultGroupColor }, // Result group color - xuất string
+        { col: totalNetCol, label: 'Tổng tiền sau phí', value: formatAmount(totalNet), color: resultGroupColor } // Result group color - xuất string
       ].filter(cell => cell.col !== -1); // Chỉ thêm các cột tồn tại
 
       // Add summary row with styling
-      summaryCells.forEach(({ col, label, value, color }) => {
-        const labelAddress = XLSX.utils.encode_cell({ r: 0, c: col });
+      // Yêu cầu: Gom label và value thành 1 nhóm (liền kề nhau), các nhóm cách nhau ít nhất 3 ô
+      // Đảm bảo tất cả nhóm đều có đủ chỗ hiển thị, kể cả nhóm cuối
+      const allUsedCols = new Set<number>(); // Tất cả cột đã dùng (label + value)
+      let lastGroupEndCol = -1; // Cột cuối cùng của nhóm trước đó
+      const minGap = 3; // Khoảng cách tối thiểu giữa các nhóm
+      
+      // Sắp xếp theo thứ tự col để đảm bảo đặt đúng vị trí (từ trái sang phải)
+      const sortedSummaryCells = [...summaryCells].sort((a, b) => a.col - b.col);
+      
+      sortedSummaryCells.forEach(({ col, label, value, color }, index) => {
+        // Tìm vị trí bắt đầu cho nhóm này
+        let groupStartCol = col;
+        
+        // Nếu không phải nhóm đầu tiên, cách nhóm trước ít nhất minGap ô
+        if (lastGroupEndCol >= 0 && groupStartCol <= lastGroupEndCol + minGap) {
+          groupStartCol = lastGroupEndCol + minGap;
+        }
+        
+        // Đảm bảo không vượt quá số cột có sẵn (headers.length)
+        // Mỗi nhóm cần 2 cột (label + value), nên nhóm cuối phải có ít nhất 2 cột trống
+        const maxCol = headers.length - 1;
+        if (groupStartCol + 1 > maxCol) {
+          // Nếu không đủ chỗ, giảm khoảng cách giữa các nhóm
+          groupStartCol = Math.max(col, lastGroupEndCol + 1);
+        }
+        
+        // Đặt label vào groupStartCol
+        const labelAddress = XLSX.utils.encode_cell({ r: 0, c: groupStartCol });
         sheet[labelAddress] = { 
           v: label, 
           t: 's',
@@ -656,12 +700,22 @@ const AdminReport: React.FC = () => {
             }
           }
         };
+        allUsedCols.add(groupStartCol);
         
-        const valueAddress = XLSX.utils.encode_cell({ r: 0, c: col + 1 });
+        // Đặt value vào groupStartCol + 1 (liền kề với label để tạo nhóm)
+        let valueCol = groupStartCol + 1;
+        // Đảm bảo valueCol không vượt quá số cột có sẵn
+        if (valueCol > maxCol) {
+          valueCol = maxCol;
+        }
+        while (allUsedCols.has(valueCol) && valueCol < maxCol) {
+          valueCol++;
+        }
+        
+        const valueAddress = XLSX.utils.encode_cell({ r: 0, c: valueCol });
         sheet[valueAddress] = { 
           v: value, 
-          t: 'n', 
-          z: '#,##0',
+          t: 's', // Xuất dưới dạng string
           s: {
             fill: { fgColor: { rgb: color } },
             font: { bold: true, color: { rgb: '000000' } },
@@ -674,6 +728,10 @@ const AdminReport: React.FC = () => {
             }
           }
         };
+        allUsedCols.add(valueCol);
+        
+        // Cập nhật lastGroupEndCol để nhóm tiếp theo cách ít nhất minGap ô
+        lastGroupEndCol = valueCol;
       });
 
       // Add headers at row 2 with group colors
@@ -778,23 +836,10 @@ const AdminReport: React.FC = () => {
             }
           };
           
-          if (numberColumns.includes(colIndex)) {
-            const numValue = typeof value === 'number' ? value : parseFloat(String(value).replace(/[^\d.-]/g, ''));
-            if (!isNaN(numValue)) {
-              cellData = { v: numValue, t: 'n', z: '#,##0', s: cellStyle };
-            } else {
-              cellData = { v: value, t: 's', s: cellStyle };
-            }
-          } else if (dateColumns.includes(colIndex)) {
-            const dateValue = value instanceof Date ? value : new Date(value as string);
-            if (!isNaN(dateValue.getTime())) {
-              cellData = { v: dateValue, t: 'd', z: 'dd/mm/yyyy', s: cellStyle };
-            } else {
-              cellData = { v: value, t: 's', s: cellStyle };
-            }
-          } else {
-            cellData = { v: value, t: 's', s: cellStyle };
-          }
+          // Xuất TẤT CẢ dưới dạng string giống như trên giao diện
+          // Không format thành number hay date, chỉ giữ nguyên string
+          const stringValue = value === null || value === undefined ? '-' : String(value);
+          cellData = { v: stringValue, t: 's', s: cellStyle };
           
           sheet[cellAddress] = cellData;
         });
@@ -961,6 +1006,8 @@ const AdminReport: React.FC = () => {
               <Pagination
                 currentPage={currentPage}
                 totalPages={totalPages}
+                itemsPerPage={itemsPerPage}
+                totalItems={totalRecords}
                 onPageChange={setCurrentPage}
               />
             </div>

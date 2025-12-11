@@ -1028,9 +1028,12 @@ const Payouts: React.FC = () => {
                                 }}
                                 onChange={(e) => {
                                   if (e.target.checked) {
-                                    setSelectedReports(prev => [...prev, ...group.reports.map(r => r.id).filter(id => !prev.includes(id))]);
+                                    // Chỉ cho phép chọn một card tại một thời điểm
+                                    // Xóa tất cả reports của agents khác và chỉ chọn reports của card này
+                                    setSelectedReports(group.reports.map(r => r.id));
                                   } else {
-                                    setSelectedReports(prev => prev.filter(id => !group.reports.some(r => r.id === id)));
+                                    // Uncheck: xóa tất cả reports của card này
+                                    setSelectedReports([]);
                                   }
                                 }}
                                 className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
