@@ -652,9 +652,9 @@ const ReportTable: React.FC<ReportTableProps> = ({
                       Mã giao dịch
                     </th>
                     {/* 2. Điểm thu - hiển thị cho tất cả roles */}
-                    <th className="px-2 sm:px-3 md:px-4 lg:px-6 py-2 sm:py-2.5 md:py-3 text-left text-[10px] sm:text-xs font-medium text-slate-500 uppercase tracking-wider bg-blue-50 border-r border-slate-200">
-                      Điểm thu
-                    </th>
+                      <th className="px-2 sm:px-3 md:px-4 lg:px-6 py-2 sm:py-2.5 md:py-3 text-left text-[10px] sm:text-xs font-medium text-slate-500 uppercase tracking-wider bg-blue-50 border-r border-slate-200">
+                        Điểm thu
+                      </th>
                     {showUserColumn && (
                       <th className="px-2 sm:px-3 md:px-4 lg:px-6 py-2 sm:py-2.5 md:py-3 text-left text-[10px] sm:text-xs font-medium text-slate-500 uppercase tracking-wider bg-blue-50 border-r border-slate-200">
                         Người dùng
@@ -849,13 +849,13 @@ const ReportTable: React.FC<ReportTableProps> = ({
                         )}
                       </td>
                       {/* 2. Điểm thu - hiển thị cho tất cả roles */}
-                      <td className="px-2 sm:px-3 md:px-4 lg:px-6 py-2 sm:py-3 md:py-4 whitespace-nowrap text-[10px] sm:text-xs md:text-sm text-slate-500 bg-blue-50 border-r border-slate-200">
-                        {record.userBillId ? (
-                          <span className="truncate block max-w-[100px] sm:max-w-none">{record.pointOfSaleName || record.merchantPointOfSaleName || '-'}</span>
-                        ) : (
-                          <span className="text-slate-400">-</span>
-                        )}
-                      </td>
+                        <td className="px-2 sm:px-3 md:px-4 lg:px-6 py-2 sm:py-3 md:py-4 whitespace-nowrap text-[10px] sm:text-xs md:text-sm text-slate-500 bg-blue-50 border-r border-slate-200">
+                          {record.userBillId ? (
+                            <span className="truncate block max-w-[100px] sm:max-w-none">{record.pointOfSaleName || record.merchantPointOfSaleName || '-'}</span>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
+                        </td>
                       {showUserColumn && (
                         <td className="px-2 sm:px-3 md:px-4 lg:px-6 py-2 sm:py-3 md:py-4 whitespace-nowrap text-[10px] sm:text-xs md:text-sm text-slate-500 bg-blue-50 border-r border-slate-200">
                           {record.userId ? (
@@ -1163,9 +1163,9 @@ const ReportTable: React.FC<ReportTableProps> = ({
                                 Đã thanh toán
                               </span>
                             ) : record.adminPaymentStatus === 'UNPAID' ? (
-                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800">
-                                Chưa thanh toán
-                              </span>
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800">
+                              Chưa thanh toán
+                            </span>
                             ) : record.adminPaymentStatus === 'PARTIAL' ? (
                               <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
                                 Thanh toán một phần

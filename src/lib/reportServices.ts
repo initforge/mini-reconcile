@@ -353,8 +353,8 @@ export const ReportService = {
       const existingReport = allReportRecords.find(r => r.userBillId === bill.id);
       
       // Kiểm tra xem đã có record với merchantTransactionId cho transactionCode này chưa
-      const existingRecord = recordsByTransactionCode.get(code);
-      
+        const existingRecord = recordsByTransactionCode.get(code);
+        
       // Nếu đã có record với merchantTransactionId, đảm bảo userBillId được set đúng
       if (existingRecord && existingRecord.merchantTransactionId) {
         // Nếu record chưa có userBillId hoặc userBillId không match, cập nhật
@@ -373,8 +373,8 @@ export const ReportService = {
         }
       } else if (existingReport && existingReport.merchantTransactionId) {
         // Nếu có ReportRecord với merchantTransactionId nhưng chưa có trong map, thêm vào
-        recordsByTransactionCode.set(code, existingReport);
-      }
+          recordsByTransactionCode.set(code, existingReport);
+        }
     }
 
     // Bước 3: CHỈ trả về records có merchant data (đã có file merchants khớp)

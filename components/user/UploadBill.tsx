@@ -48,6 +48,21 @@ const UploadBill: React.FC = () => {
   const normalizedCode = agentCode?.trim().toUpperCase();
   const selectedAgent = agents.find(a => a.code?.trim().toUpperCase() === normalizedCode);
 
+  // Load user bills to get list of agents user has uploaded bills to
+  const { data: billsData } = useRealtimeData<Record<string, UserBill>>('/user_bills');
+  const allBills = FirebaseUtils.objectToArray(billsData || {});
+  
+  // Get agents that user has uploaded bills to
+  const agentsWithBills = useMemo(() => {
+    if (!userId) return [];
+    const userBills = allBills.filter(bill => bill.userId === userId);
+    const agentIds = new Set(userBills.map(bill => bill.agentId));
+    return agents.filter(agent => agentIds.has(agent.id));
+  }, [agents, allBills, userId]);
+
+  // Modal state for agent selection
+  const [showAgentModal, setShowAgentModal] = useState(false);
+
   const [billPreviews, setBillPreviews] = useState<BillPreview[]>([]);
   const ocrConcurrencyLimit = 5; // Increased from 3 to 5 for faster processing
   const [isUploading, setIsUploading] = useState(false);
@@ -64,7 +79,7 @@ const UploadBill: React.FC = () => {
 
     // Reset state when agentCode changes
     if (!agentCode) {
-      setErrorMessage('Thiếu mã đại lý. Vui lòng sử dụng link từ đại lý.');
+      setErrorMessage(''); // Don't show error if no agent selected, user can choose from modal
       return;
     }
 
@@ -455,12 +470,24 @@ const UploadBill: React.FC = () => {
       {/* Agent Selection / Info - Unified Panel */}
       <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
         {!selectedAgent ? (
-          <div>
-            <h3 className="text-lg font-semibold text-slate-900 mb-4">Chọn đại lý để upload bill</h3>
-            <p className="text-sm text-slate-600 mb-4">
-              Vui lòng sử dụng link từ đại lý với tham số ?agents=AG_XXX để chọn đại lý.
-            </p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-slate-900 mb-2">Chọn đại lý để upload bill</h3>
+              <p className="text-sm text-slate-600">
+                {agentsWithBills.length > 0 
+                  ? 'Chọn đại lý từ danh sách đã từng up bills hoặc sử dụng link từ đại lý.'
+                  : 'Vui lòng sử dụng link từ đại lý với tham số ?agents=AG_XXX để chọn đại lý.'}
+              </p>
             </div>
+            {agentsWithBills.length > 0 && (
+              <button
+                onClick={() => setShowAgentModal(true)}
+                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm font-medium"
+              >
+                Chọn đại lý
+              </button>
+            )}
+          </div>
         ) : (
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
@@ -473,10 +500,8 @@ const UploadBill: React.FC = () => {
               </div>
             </div>
             <button
-              onClick={() => {
-                setSearchParams({});
-              }}
-              className="text-sm text-indigo-600 hover:text-indigo-800"
+              onClick={() => setShowAgentModal(true)}
+              className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
             >
               Chọn đại lý khác
             </button>
@@ -736,6 +761,60 @@ const UploadBill: React.FC = () => {
       </div>
 
       {/* Lịch sử up bill - Gộp chung với Tab Up bill */}
+      {/* Agent Selection Modal */}
+      {showAgentModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setShowAgentModal(false)}>
+          <div className="bg-white rounded-xl p-6 max-w-md w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-slate-900">Chọn đại lý</h3>
+              <button
+                onClick={() => setShowAgentModal(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            {agentsWithBills.length === 0 ? (
+              <div className="text-center py-8">
+                <p className="text-slate-600 mb-4">Bạn chưa từng up bills cho đại lý nào.</p>
+                <p className="text-sm text-slate-500">Vui lòng sử dụng link từ đại lý với tham số ?agents=AG_XXX</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {agentsWithBills.map((agent) => (
+                  <button
+                    key={agent.id}
+                    onClick={() => {
+                      setSearchParams({ agents: agent.code });
+                      setShowAgentModal(false);
+                    }}
+                    className={`w-full text-left p-4 rounded-lg border-2 transition-colors ${
+                      selectedAgent?.id === agent.id
+                        ? 'border-indigo-500 bg-indigo-50'
+                        : 'border-slate-200 hover:border-indigo-300 hover:bg-indigo-50'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-3">
+                      <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
+                        <span className="text-indigo-600 font-bold">{agent.code}</span>
+                      </div>
+                      <div className="flex-1">
+                        <h4 className="font-semibold text-slate-900">{agent.name}</h4>
+                        <p className="text-sm text-slate-600">Mã đại lý: {agent.code}</p>
+                      </div>
+                      {selectedAgent?.id === agent.id && (
+                        <CheckCircle className="w-5 h-5 text-indigo-600" />
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <BillHistorySection userId={userId} />
     </div>
   );
