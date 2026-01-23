@@ -550,3 +550,68 @@ export interface ReportRecord {
   
   createdAt: string;            // ISO – thời điểm tạo record
 }
+
+// ================================
+// QR EMV ENCODE/DECODE TYPES
+// ================================
+
+// QR Master Data - Dữ liệu master cho việc sinh QR
+export interface QRMasterData {
+  id: string;
+  mid: string; // MID (Merchant ID / Chọn hộ)
+  midLabel: string; // Tên hiển thị: "BACHHOATHANH..."
+  beneficiaryName: string; // Đơn vị thụ hưởng
+  pointOfSale: string; // Điểm bán
+  accountNumber: string; // Số tài khoản ngân hàng
+  bankCode?: string; // Mã ngân hàng (VD: 970415 = VietinBank)
+  mcc: string; // MCC code (VD: 7298)
+  merchantCity?: string; // Thành phố (VD: LAMDONG)
+  postalCode?: string; // Mã bưu điện
+  isActive: boolean;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+// QR Product - Sản phẩm liên kết với MID
+export interface QRProduct {
+  id: string;
+  masterId: string; // Reference to QRMasterData
+  productName: string; // Tên SP
+  productCode: string; // Mã SP
+  defaultAmount?: number; // Số tiền mặc định (optional)
+  isActive: boolean;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+// QR Generate Request - Yêu cầu sinh QR từ User
+export interface QRGenerateRequest {
+  masterId: string;
+  productId: string;
+  amount: number;
+  paymentDeadline: string; // ISO date
+}
+
+// EMV QR Field - Một field trong chuỗi QR EMV
+export interface EMVQRField {
+  id: string; // 2 chars (00-99)
+  length: number;
+  value: string;
+}
+
+// Parsed EMV QR - Kết quả parse chuỗi QR
+export interface ParsedEMVQR {
+  payloadFormatIndicator: string; // ID 00
+  pointOfInitiation: string; // ID 01
+  merchantAccountInfo: string; // ID 26
+  mcc: string; // ID 52
+  currency: string; // ID 53 (704 = VND)
+  amount?: string; // ID 54
+  country: string; // ID 58
+  merchantName: string; // ID 59
+  merchantCity: string; // ID 60
+  postalCode?: string; // ID 61
+  additionalData?: string; // ID 62
+  crc: string; // ID 63
+  rawFields: EMVQRField[]; // All parsed fields
+}

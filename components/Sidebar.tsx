@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Users, Store, FileText, Settings, UploadCloud, CreditCard, UserCog, LogOut, BarChart3, X } from 'lucide-react';
+import { Users, Store, FileText, Settings, UploadCloud, CreditCard, UserCog, LogOut, BarChart3, X, QrCode } from 'lucide-react';
 import { SettingsService } from '../src/lib/firebaseServices';
 import { AppSettings } from '../types';
 
@@ -19,12 +19,12 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout, isMobileOpen = f
   useEffect(() => {
     loadSettings();
     loadAdminInfo();
-    
+
     // Listen for settings changes (reload every 30 seconds)
     const interval = setInterval(() => {
       loadSettings();
     }, 30000);
-    
+
     return () => clearInterval(interval);
   }, []);
 
@@ -52,6 +52,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout, isMobileOpen = f
   const menuItems = [
     { id: 'reconciliation', label: 'Đối soát & Xử lý', icon: FileText, path: '/reconciliation' },
     { id: 'report', label: 'Báo cáo', icon: BarChart3, path: '/admin/report' },
+    { id: 'qr-management', label: 'Quản lý QR', icon: QrCode, path: '/qr-management' },
     { id: 'merchants', label: 'Quản lý Điểm bán', icon: Store, path: '/merchants' },
     { id: 'agents', label: 'Quản lý Đại lý', icon: Users, path: '/agents' },
     { id: 'personnel', label: 'Quản lý Khách hàng', icon: UserCog, path: '/personnel' },
@@ -70,8 +71,8 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout, isMobileOpen = f
           <div className="flex items-center space-x-3">
             {logoUrl ? (
               <div className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center bg-white/10 border border-white/20">
-                <img 
-                  src={logoUrl} 
+                <img
+                  src={logoUrl}
                   alt={companyName}
                   className="w-full h-full object-contain"
                 />
@@ -108,11 +109,10 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout, isMobileOpen = f
               to={item.path}
               replace={false}
               onClick={onMobileClose}
-              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 group ${
-                isActive
+              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 group ${isActive
                   ? 'bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-lg shadow-indigo-500/30'
                   : 'text-slate-400 hover:bg-slate-800/50 hover:text-white'
-              }`}
+                }`}
               style={{ position: 'relative', zIndex: 101, pointerEvents: 'auto' }}
             >
               <Icon className={`w-5 h-5 transition-transform ${isActive ? 'scale-110' : 'group-hover:scale-105'}`} />
@@ -130,8 +130,8 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout, isMobileOpen = f
             <p className="text-xs text-slate-400 truncate">Super Administrator</p>
           </div>
         </div>
-        
-        <button 
+
+        <button
           onClick={onLogout}
           className="w-full flex items-center justify-center space-x-2 px-4 py-2.5 text-sm font-medium text-red-300 hover:text-red-200 hover:bg-red-900/20 rounded-xl transition-all duration-200 border border-red-900/30 hover:border-red-800/50"
         >
@@ -146,21 +146,20 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onLogout, isMobileOpen = f
     <>
       {/* Mobile overlay */}
       {isMobileOpen && (
-        <div 
+        <div
           className="lg:hidden fixed inset-0 bg-black/50 z-[90] transition-opacity"
           onClick={onMobileClose}
         />
       )}
-      
+
       {/* Desktop Sidebar */}
       <div className="hidden lg:flex w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white min-h-screen flex-col shadow-2xl fixed left-0 top-0 z-[100] border-r border-slate-700">
         <SidebarContent />
       </div>
 
       {/* Mobile Drawer */}
-      <div className={`lg:hidden fixed inset-y-0 left-0 w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white flex-col shadow-2xl z-[100] border-r border-slate-700 transform transition-transform duration-300 ease-in-out ${
-        isMobileOpen ? 'translate-x-0' : '-translate-x-full'
-      }`}>
+      <div className={`lg:hidden fixed inset-y-0 left-0 w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white flex-col shadow-2xl z-[100] border-r border-slate-700 transform transition-transform duration-300 ease-in-out ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}>
         <SidebarContent />
       </div>
     </>

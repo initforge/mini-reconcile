@@ -8,7 +8,7 @@ import type { User } from '../../types';
 const UserLayout: React.FC = () => {
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  
+
   // Get current tab from path
   const getActiveTab = () => {
     if (location.pathname.includes('/upbill')) return 'upload';
@@ -22,7 +22,7 @@ const UserLayout: React.FC = () => {
   // Get user info from localStorage
   const userAuth = localStorage.getItem('userAuth');
   const userId = userAuth ? JSON.parse(userAuth).userId : null;
-  
+
   const { data: userData } = useRealtimeData<Record<string, User>>('/users');
   const user = userData && userId ? Object.values(userData).find(u => u.id === userId) : null;
 
@@ -38,13 +38,13 @@ const UserLayout: React.FC = () => {
 
   return (
     <div className="flex min-h-screen bg-slate-50" style={{ position: 'relative' }}>
-      <UserSidebar 
-        activeTab={getActiveTab()} 
+      <UserSidebar
+        activeTab={getActiveTab()}
         onLogout={handleLogout}
         isMobileOpen={isMobileMenuOpen}
         onMobileClose={() => setIsMobileMenuOpen(false)}
       />
-      
+
       <main className="flex-1 lg:ml-64 p-4 md:p-8 overflow-y-auto h-screen" style={{ position: 'relative', zIndex: 1 }}>
         {/* Mobile Header */}
         <div className="lg:hidden mb-4 border-b border-slate-200 pb-3">

@@ -18,7 +18,7 @@ const UserSidebar: React.FC<UserSidebarProps> = ({ activeTab, onLogout, isMobile
   // Get user info from localStorage
   const userAuth = localStorage.getItem('userAuth');
   const userId = userAuth ? JSON.parse(userAuth).userId : null;
-  
+
   // Load user data from Firebase
   const { data: usersData } = useRealtimeData<Record<string, User>>('/users');
   const user = usersData && userId ? usersData[userId] : null;
@@ -69,7 +69,7 @@ const UserSidebar: React.FC<UserSidebarProps> = ({ activeTab, onLogout, isMobile
         {menuItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id || location.pathname === item.path;
-          
+
           return (
             <button
               key={item.id}
@@ -77,11 +77,10 @@ const UserSidebar: React.FC<UserSidebarProps> = ({ activeTab, onLogout, isMobile
                 handleNavigate(item.path);
                 onMobileClose?.();
               }}
-              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${
-                isActive
-                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/50 transform scale-[1.02]'
-                  : 'text-slate-300 hover:bg-slate-700/50 hover:text-white hover:translate-x-1'
-              }`}
+              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${isActive
+                ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/50 transform scale-[1.02]'
+                : 'text-slate-300 hover:bg-slate-700/50 hover:text-white hover:translate-x-1'
+                }`}
             >
               <Icon className={`w-5 h-5 ${isActive ? 'text-white' : ''}`} />
               <span className="font-medium">{item.label}</span>
@@ -119,21 +118,20 @@ const UserSidebar: React.FC<UserSidebarProps> = ({ activeTab, onLogout, isMobile
     <>
       {/* Mobile overlay */}
       {isMobileOpen && (
-        <div 
+        <div
           className="lg:hidden fixed inset-0 bg-black/50 z-[90] transition-opacity"
           onClick={onMobileClose}
         />
       )}
-      
+
       {/* Desktop Sidebar */}
       <div className="hidden lg:flex w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white min-h-screen flex-col shadow-2xl fixed left-0 top-0 z-[100] border-r border-slate-700">
         <SidebarContent />
       </div>
 
       {/* Mobile Drawer */}
-      <div className={`lg:hidden fixed inset-y-0 left-0 w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white flex-col shadow-2xl z-[100] border-r border-slate-700 transform transition-transform duration-300 ease-in-out ${
-        isMobileOpen ? 'translate-x-0' : '-translate-x-full'
-      }`}>
+      <div className={`lg:hidden fixed inset-y-0 left-0 w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-white flex-col shadow-2xl z-[100] border-r border-slate-700 transform transition-transform duration-300 ease-in-out ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}>
         <SidebarContent />
       </div>
     </>

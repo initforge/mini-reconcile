@@ -13,6 +13,7 @@ import Merchants from './components/Merchants';
 import Payouts from './components/Payouts';
 import Reports from './components/Reports';
 import Settings from './components/Settings';
+import QRManagement from './components/QRManagement';
 import { Stats } from './types';
 // User components
 import UserLogin from './components/user/UserLogin';
@@ -23,6 +24,7 @@ import BillHistory from './components/user/BillHistory';
 import UserReport from './components/user/UserReport';
 import PaymentStatus from './components/user/PaymentStatus';
 import UserUtilities from './components/user/UserUtilities';
+import QRGenerator from './components/QRGenerator';
 // Agent components
 import AgentLogin from './components/agent/AgentLogin';
 import AgentLayout from './components/agent/AgentLayout';
@@ -75,7 +77,7 @@ const PayoutsWrapper: React.FC = () => {
 const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  
+
   // Map pathname to activeTab ID for sidebar highlighting
   const getActiveTab = (pathname: string): string => {
     if (pathname === '/admin/report' || pathname.startsWith('/admin/report')) {
@@ -98,13 +100,13 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
   return (
     <div className="flex min-h-screen bg-slate-50" style={{ position: 'relative' }}>
-      <Sidebar 
+      <Sidebar
         activeTab={currentPath}
         onLogout={handleLogout}
         isMobileOpen={isMobileMenuOpen}
         onMobileClose={() => setIsMobileMenuOpen(false)}
       />
-      
+
       <main className="flex-1 lg:ml-64 p-4 md:p-8 overflow-y-auto h-screen" style={{ position: 'relative', zIndex: 1 }}>
         {/* Mobile Header */}
         <div className="lg:hidden mb-4 pb-4 border-b border-slate-200">
@@ -132,16 +134,17 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               {currentPath === 'agents' && 'Danh sách Đại lý'}
               {currentPath === 'payouts' && 'Quản lý Thanh toán'}
               {currentPath === 'reports' && 'Báo cáo Công nợ'}
+              {currentPath === 'qr-management' && 'Quản lý QR'}
               {currentPath === 'settings' && 'Cài đặt'}
             </h1>
             <p className="text-sm text-slate-500 mt-1">{new Date().toLocaleDateString('vi-VN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
           </div>
-          
+
           <div className="hidden lg:flex items-center space-x-4 w-full sm:w-auto">
-             <div className="bg-white border border-slate-200 rounded-lg px-3 md:px-4 py-2 flex items-center text-xs md:text-sm text-slate-600 shadow-sm">
-               <span className="w-2 h-2 rounded-full bg-green-500 mr-2"></span>
-               <span className="hidden sm:inline">Hệ thống hoạt động: </span>Bình thường
-             </div>
+            <div className="bg-white border border-slate-200 rounded-lg px-3 md:px-4 py-2 flex items-center text-xs md:text-sm text-slate-600 shadow-sm">
+              <span className="w-2 h-2 rounded-full bg-green-500 mr-2"></span>
+              <span className="hidden sm:inline">Hệ thống hoạt động: </span>Bình thường
+            </div>
           </div>
         </header>
 
@@ -155,7 +158,7 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 };
 
 function App() {
-  
+
   const handleLogin = () => {
     console.log('🔐 Mock login triggered');
     localStorage.setItem('mockAuth', 'true');
@@ -167,108 +170,123 @@ function App() {
       <Routes>
         {/* Homepage */}
         <Route path="/" element={<HomePage />} />
-        
+
+        {/* Public QR Generator - No login required */}
+        <Route path="/qr" element={<QRGenerator />} />
+
         {/* Admin Report Route (must be before /admin route to avoid conflict) */}
-        <Route 
-          path="/admin/report" 
+        <Route
+          path="/admin/report"
           element={
             <ProtectedRoute>
               <AppLayout>
                 <AdminReport />
               </AppLayout>
             </ProtectedRoute>
-          } 
+          }
         />
-        
+
         {/* Admin Login Route (Private) */}
-        <Route 
-          path="/admin" 
-          element={<Login onLogin={handleLogin} />} 
+        <Route
+          path="/admin"
+          element={<Login onLogin={handleLogin} />}
         />
-        
+
         {/* Protected Routes */}
-        <Route 
-          path="/reconciliation" 
+        <Route
+          path="/reconciliation"
           element={
             <ProtectedRoute>
               <AppLayout>
                 <ReconciliationModule />
               </AppLayout>
             </ProtectedRoute>
-          } 
+          }
         />
-        
-        <Route 
-          path="/merchants" 
+
+        <Route
+          path="/merchants"
           element={
             <ProtectedRoute>
               <AppLayout>
                 <Merchants />
               </AppLayout>
             </ProtectedRoute>
-          } 
+          }
         />
-        
-        <Route 
-          path="/agents" 
+
+        <Route
+          path="/agents"
           element={
             <ProtectedRoute>
               <AppLayout>
                 <Agents />
               </AppLayout>
             </ProtectedRoute>
-          } 
+          }
         />
-        
-        <Route 
-          path="/personnel" 
+
+        <Route
+          path="/personnel"
           element={
             <ProtectedRoute>
               <AppLayout>
                 <PersonnelManagement />
               </AppLayout>
             </ProtectedRoute>
-          } 
+          }
         />
-        
-        <Route 
-          path="/payouts" 
+
+        <Route
+          path="/payouts"
           element={
             <ProtectedRoute>
               <AppLayout>
                 <PayoutsWrapper />
               </AppLayout>
             </ProtectedRoute>
-          } 
+          }
         />
-        
-        <Route 
-          path="/reports" 
+
+        <Route
+          path="/reports"
           element={
             <ProtectedRoute>
               <AppLayout>
                 <Reports />
               </AppLayout>
             </ProtectedRoute>
-          } 
+          }
         />
-        
-        <Route 
-          path="/settings" 
+
+        <Route
+          path="/settings"
           element={
             <ProtectedRoute>
               <AppLayout>
                 <Settings />
               </AppLayout>
             </ProtectedRoute>
-          } 
+          }
         />
-        
+
+        {/* QR Management Route */}
+        <Route
+          path="/qr-management"
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <QRManagement />
+              </AppLayout>
+            </ProtectedRoute>
+          }
+        />
+
         {/* User Routes */}
         <Route path="/user/login" element={<UserLogin />} />
         <Route path="/user/register" element={<UserRegister />} />
-        <Route 
-          path="/user" 
+        <Route
+          path="/user"
           element={
             <ProtectedUserRoute>
               <UserLayout />
@@ -285,8 +303,8 @@ function App() {
 
         {/* Agent Routes */}
         <Route path="/agent/login" element={<AgentLogin />} />
-        <Route 
-          path="/agent" 
+        <Route
+          path="/agent"
           element={
             <ProtectedAgentRoute>
               <AgentLayout />
@@ -300,11 +318,11 @@ function App() {
           <Route path="utilities" element={<AgentUtilities />} />
           <Route index element={<Navigate to="/agent/report" replace />} />
         </Route>
-        
+
         {/* Default Redirects */}
-        <Route 
-          path="*" 
-          element={<Navigate to="/" replace />} 
+        <Route
+          path="*"
+          element={<Navigate to="/" replace />}
         />
       </Routes>
     </Router>
