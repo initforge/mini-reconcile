@@ -1,23 +1,26 @@
 🇻🇳 [Đọc bằng tiếng Việt](README-vi.md)
 
-# Mini Reconcile
+# Mini Reconcile — AI Transaction Reconciliation
 
-AI-powered OCR transaction reconciliation tool
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white) ![React](https://img.shields.io/badge/React-61DAFB?style=flat-square&logo=react&logoColor=white) ![Gemini API](https://img.shields.io/badge/Gemini%20API-8E75B2?style=flat-square) ![Firebase](https://img.shields.io/badge/Firebase-FFCA28?style=flat-square&logo=firebase&logoColor=white) ![Vite](https://img.shields.io/badge/Vite-646CFF?style=flat-square&logo=vite&logoColor=white)
 
-## Tech Stack
+An AI-powered tool that uses OCR and Gemini API to automatically reconcile financial transactions from scanned documents against digital records.
 
-![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white) ![Gemini API](https://img.shields.io/badge/Gemini%20API-8E75B2?style=flat-square) ![OCR](https://img.shields.io/badge/OCR-333333?style=flat-square)
+## What it does
 
-## Features
+- **OCR document scanning** — extract transaction data from images/PDFs
+- **AI matching engine** — Gemini API matches scanned entries to database records
+- **Discrepancy detection** — highlights mismatches, missing entries, amount differences
+- **Export to Excel** — reconciliation reports in xlsx format
 
-- OCR document scanning
-- AI-powered transaction matching
-- Automated reconciliation reports
-- Gemini API integration
+## Tech highlights
+
+- Uses `@google/genai` SDK for Gemini integration
+- Firebase for user auth and document storage
+- xlsx-js-style for formatted Excel exports
+- React Router for multi-page workflow
 
 ---
-
-## Author
 
 **Xuan Linh** — Fullstack Developer
 
