@@ -6,19 +6,25 @@
 
 An AI-powered tool that uses OCR and Gemini API to automatically reconcile financial transactions from scanned documents against digital records.
 
+## Preview
+
+![Mini Reconcile — AI Transaction Reconciliation](docs/screenshot.png)
+
 ## What it does
 
 - **OCR document scanning** — extract transaction data from images/PDFs
 - **AI matching engine** — Gemini API matches scanned entries to database records
 - **Discrepancy detection** — highlights mismatches, missing entries, amount differences
-- **Export to Excel** — reconciliation reports in xlsx format
+- **Export to Excel** — reconciliation reports in xlsx format with formatting
 
-## Tech highlights
+## Getting started
 
-- Uses `@google/genai` SDK for Gemini integration
-- Firebase for user auth and document storage
-- xlsx-js-style for formatted Excel exports
-- React Router for multi-page workflow
+```bash
+git clone https://github.com/initforge/mini-reconcile.git
+cd mini-reconcile
+npm install
+npm run dev  # Requires Gemini API key in env
+```
 
 ---
 
