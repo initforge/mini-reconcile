@@ -6,19 +6,25 @@
 
 Công cụ dùng OCR và Gemini API để tự động đối soát giao dịch tài chính từ chứng từ scan với dữ liệu số.
 
+## Xem trước
+
+![Mini Reconcile — Đối soát Giao dịch bằng AI](docs/screenshot.png)
+
 ## Tính năng chính
 
 - **Quét tài liệu OCR** — trích xuất dữ liệu giao dịch từ ảnh/PDF
 - **AI matching** — Gemini API đối chiếu bản scan với database
 - **Phát hiện sai lệch** — highlight mismatch, thiếu entries, sai số tiền
-- **Xuất Excel** — báo cáo đối soát định dạng xlsx
+- **Xuất Excel** — báo cáo đối soát định dạng xlsx có format
 
-## Điểm kỹ thuật
+## Cài đặt
 
-- Dùng `@google/genai` SDK tích hợp Gemini
-- Firebase cho auth và lưu trữ tài liệu
-- xlsx-js-style cho export Excel có format
-- React Router cho workflow nhiều bước
+```bash
+git clone https://github.com/initforge/mini-reconcile.git
+cd mini-reconcile
+npm install
+npm run dev  # Cần Gemini API key trong env
+```
 
 ---
 
